@@ -15,10 +15,12 @@ class MLP(nn.Module):
         self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
         self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.fc2(x)
+        x = self.dropout(x)
         return x
 
 class CausalSelfAttention(nn.Module):
@@ -30,6 +32,9 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                     .view(1, 1, config.block_size, config.block_size))
 
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
     
@@ -40,15 +45,15 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
         y = att @ v
         
         y = y.transpose(1, 2).contiguous().view(B, T, C) 
 
-        y = self.fc_out(y)
+        y = self.resid_dropout(self.fc_out(y))
 
         return y
 
@@ -71,23 +76,29 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
-        self.pos_emb = nn.Embedding(config.vocab_size, config.emb_dim)
+        self.pos_emb = nn.Embedding(config.block_size, config.emb_dim)
 
+        self.dropout = nn.Dropout(config.dropout)
         self.config = config
 
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
 
         self.fc1 = nn.Linear(config.emb_dim, config.vocab_size)
 
+        self.ln = nn.LayerNorm(config.emb_dim)
+
+        # self.inp_emb.weight = self.fc1.weight # https://paperswithcode.com/method/weight-tying
+
     def forward(self, x, y=None):
         batch, seq_len = x.shape
-        pos = torch.arange(0, seq_len).repeat(batch, 1).to(device)
+        pos = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
 
-        x = self.inp_emb(x) + self.pos_emb(pos)
+        x = self.dropout(self.inp_emb(x) + self.pos_emb(pos))
 
         for block in self.blocks:
             x = block(x)
 
+        x = self.ln(x)
         logits = self.fc1(x)
 
         loss = None        
@@ -134,21 +145,20 @@ class DataLoader:
             self.pos = 0
 
         return x, y
-    
-
 
 enc = tiktoken.get_encoding("gpt2")
 device = "mps"
 
 class Config:
-    def __init__(self):
-        self.emb_dim = 256
-        self.vocab_size = enc.n_vocab
-        self.n_layers = 4
-        self.n_head = 4
-        self.block_size = 30
-        self.batch_size = 32
-        self.iters = 1000
+    emb_dim = 512
+    vocab_size = enc.n_vocab
+    n_layers = 8
+    n_head = 8
+    block_size = 30
+    batch_size = 32
+    iters = 2000
+    dropout = 0.1
+
 config = Config()
 
 train_data = np.memmap(os.path.join("data", 'shakespare_train.bin'), dtype=np.uint16, mode='r')
@@ -159,7 +169,7 @@ trainloader = DataLoader(train_data, config.batch_size, config.block_size)
 model = GPT(config)
 model.to(device)
 
-optim = optim.AdamW(model.parameters(), lr=0.001)
+optim = optim.AdamW(model.parameters(), lr=3e-4)
 
 x, y = trainloader.get_batch()
 
@@ -172,13 +182,13 @@ for i in pbar:
     model.zero_grad()
     out, loss = model(x, y)
     loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optim.step()
     pbar.set_postfix({"train_loss": loss.item()})
     losses.append(loss.item())
 
-
-
-gen_text = model.generate("hei olen ").detach().cpu().numpy()
+model.eval()
+gen_text = model.generate("I am ").detach().cpu().numpy()
 print(gen_text)
 gen_text = enc.decode(gen_text)
 print(gen_text)
@@ -186,5 +196,4 @@ print(gen_text)
 plt.plot(range(config.iters), losses, label="Training Loss")
 plt.legend()
 plt.show()
-
 
