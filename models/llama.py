@@ -26,29 +26,20 @@ no dropout https://github.com/openlm-research/open_llama/issues/22
 
 """
 
-
-
-
-import numpy as np
 from torch import nn
 import torch
-import tiktoken
-import os
 import math
 from torch.nn import functional as F
-from torch import optim
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
-class SwiGLU(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+class MLP(nn.Module):
+    def __init__(self, config):
         super().__init__()
         # Initialize nn.Linear layers with specified input and output dimensions
-        scaled_hidden = int(2/3 * 4 * hidden_dim)
-        self.fc1 = nn.Linear(input_dim, scaled_hidden)
-        self.fc2 = nn.Linear(input_dim, scaled_hidden)
-        self.fc3 = nn.Linear(scaled_hidden, input_dim)
+        scaled_hidden = int(2/3 * 4 * config.emb_dim)
+        self.fc1 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
+        self.fc2 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
+        self.fc3 = nn.Linear(scaled_hidden, config.emb_dim, bias=False)
     
     def forward(self, x):
         # Linear transformation with the first layer
@@ -62,18 +53,6 @@ class SwiGLU(nn.Module):
         # Final linear transformation with the third layer
         return self.fc3(hidden)
 
-
-class MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
-        self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
-        self.swiglu = SwiGLU(config.emb_dim, config.emb_dim)
-
-    def forward(self, x):
-        x = self.swiglu(self.fc1(x))
-        x = self.fc2(x)
-        return x
     
 class SelfAttention(nn.Module):
     def __init__(self, config):
@@ -167,7 +146,6 @@ class LLama(nn.Module):
     
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
-        inp = torch.tensor(enc.encode(inp)).to(device)
         inp = inp.reshape(1, -1)
         for _ in range(self.config.block_size-inp.shape[1]):
             logits, _ = self.forward(inp)

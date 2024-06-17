@@ -3,7 +3,7 @@ import torch
 import tiktoken
 import os
 from torch import optim
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 from models import *
 import json
@@ -58,9 +58,9 @@ if __name__ == "__main__":
         vocab_size = enc.n_vocab
         n_layers = 8
         n_head = 8
-        block_size = 30
+        block_size = 36
         batch_size = 32
-        iters = 100
+        iters = 150
         dropout = 0.1
         window_size = block_size // 2
         n_groups = 8
@@ -102,11 +102,11 @@ if __name__ == "__main__":
         with open(f'losses_{model_name}.json', 'w') as f:
             json.dump(losses, f)
 
-        # model.eval()
-        # gen_text = model.generate("I am ").detach().cpu().numpy()
-        # print(gen_text)
-        # gen_text = enc.decode(gen_text)
-        # print(gen_text)
+        model.eval()
+        inp = torch.tensor(enc.encode("I am ")).to(device)
+        gen_text = model.generate(inp).detach().cpu().numpy()
+        gen_text = enc.decode(gen_text)
+        print(gen_text)
 
         # plt.plot(range(config.iters), losses, label="Training Loss")
         # plt.legend()

@@ -2,4 +2,5 @@
 /venv
 .DS_Store
 __pycache__
-.json
+*.json
+/losses

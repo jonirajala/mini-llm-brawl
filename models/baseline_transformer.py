@@ -127,7 +127,6 @@ class Transformer(nn.Module):
 
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
-        inp = torch.tensor(enc.encode(inp)).to(device)
         inp = inp.reshape(1, -1)
         for _ in range(self.config.block_size-inp.shape[1]):
             logits, _ = self.forward(inp)

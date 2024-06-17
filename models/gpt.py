@@ -114,3 +114,20 @@ class GPT(nn.Module):
 
         return logits, loss
     
+    @torch.no_grad()
+    def generate(self, inp, temperature=1.0, top_k=None):
+        inp = inp.reshape(1, -1)
+        for _ in range(self.config.block_size-inp.shape[1]):
+            logits, _ = self.forward(inp)
+            logits = logits[:, -1, :] / temperature
+
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+
+            probs = F.softmax(logits, dim=-1)
+
+            inp_next = torch.multinomial(probs, num_samples=1)
+            inp = torch.cat((inp, inp_next), dim=1)
+        
+        return inp[0]
