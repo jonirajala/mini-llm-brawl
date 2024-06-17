@@ -1,2 +1,2 @@
 # JoniGPT
-Learnign Transformer architecture and its optimization
+Learning Transformer architecture and its optimization

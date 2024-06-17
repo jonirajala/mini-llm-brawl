@@ -176,7 +176,6 @@ x, y = trainloader.get_batch()
 losses = []
 
 pbar = tqdm(range(config.iters), desc="Training Progress")
-
 for i in pbar:
     x, y = trainloader.get_batch()
     model.zero_grad()
@@ -196,4 +195,3 @@ print(gen_text)
 plt.plot(range(config.iters), losses, label="Training Loss")
 plt.legend()
 plt.show()
-
