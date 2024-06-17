@@ -1,31 +1,10 @@
 """
-https://arxiv.org/pdf/2302.13971
+https://arxiv.org/pdf/2310.06825
 
-'We train large transformers on a large quantity of textual data using a standard optimizer.'
-'We tokenize the data with the bytepair encoding (BPE)'
-
-
-Differences compared to basic transformer
-
-Pre-normalization [GPT3]
-- To improve the training stability, we normalize the input of each transformer sub-layer, instead of normalizing the output. We use the RMSNorm normalizing function, 
-
-SwiGLU activation function [PaLM].
-- We replace the ReLU non-linearity by the SwiGLU activation function
-
-Rotary Embeddings [GPTNeo].
-- We remove the absolute positional embeddings, and instead, add rotary positional embeddings (RoPE), introduced by Su et al. (2021), at each layer of the network.
-
-
-AdamW optimizer
-- β1 = 0.9, β2 = 0.95.
-
-We use a cosine learning rate schedule, such that the final learning rate is equal to 10% of the maximal learning rate. We use a weight decay of 0.1 and gradient clipping of 1.0
-
-no dropout https://github.com/openlm-research/open_llama/issues/22
+like a llama with
+grouped-query attention (GQA) [1], and sliding window attention (SWA)
 
 """
-
 
 
 
@@ -41,26 +20,6 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
-class SwiGLU(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__()
-        # Initialize nn.Linear layers with specified input and output dimensions
-        scaled_hidden = int(2/3 * 4 * hidden_dim)
-        self.fc1 = nn.Linear(input_dim, scaled_hidden)
-        self.fc2 = nn.Linear(input_dim, scaled_hidden)
-        self.fc3 = nn.Linear(scaled_hidden, input_dim)
-    
-    def forward(self, x):
-        # Linear transformation with the first layer
-        x1 = self.fc1(x)
-        # Linear transformation with the second layer
-        x2 = self.fc2(x)
-        # Apply SiLU activation to the result of the first transformation
-        hidden = F.silu(x1)
-        # Element-wise multiplication of SiLU result and second transformation
-        hidden = hidden * x2
-        # Final linear transformation with the third layer
-        return self.fc3(hidden)
 
 
 class MLP(nn.Module):
@@ -68,31 +27,30 @@ class MLP(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
         self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
-        self.swiglu = SwiGLU(config.emb_dim, config.emb_dim)
+        self.silu = nn.SiLU()
 
     def forward(self, x):
-        x = self.swiglu(self.fc1(x))
+        x = self.silu(self.fc1(x))
         x = self.fc2(x)
         return x
     
-class SelfAttention(nn.Module):
+class SlidingWindowSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.emb_dim % config.n_head == 0
         self.fc_in = nn.Linear(config.emb_dim, config.emb_dim * 3)
         self.fc_out = nn.Linear(config.emb_dim, config.emb_dim)
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                    .view(1, 1, config.block_size, config.block_size))
 
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
 
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
-        self.n_groups = config.n_groups  # Number of groups for GQA
+        self.window_size = config.window_size
+        self.n_groups = config.n_groups  # New parameter for Grouped Query Attention
 
         self.pos_emb = RotaryPositionalEmbeddings(config.emb_dim // config.n_head, config.block_size)
-    
+
     def forward(self, x):
         B, T, C = x.shape
         q, k, v = self.fc_in(x).split(self.emb_dim, dim=2)
@@ -106,13 +64,22 @@ class SelfAttention(nn.Module):
 
         q, k = self.pos_emb(q), self.pos_emb(k)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-        y = att @ v
-        
-        y = y.transpose(1, 2).contiguous().view(B, T, C) 
+        attn_windows = []
+        for i in range(0, T, self.window_size):
+            q_i = q[:, :, i:i+self.window_size]
+            k_i = k[:, :, i:i+self.window_size]
+            v_i = v[:, :, i:i+self.window_size]
+
+            att = (q_i @ k_i.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y_i = att @ v_i
+
+            attn_windows.append(y_i)
+
+        y = torch.cat(attn_windows, dim=2)  # concatenate the windows along the sequence length
+
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         y = self.resid_dropout(self.fc_out(y))
 
@@ -124,7 +91,7 @@ class Block(nn.Module):
         super().__init__()
         self.rn1 = RMSNorm(config.emb_dim)
         self.rn2 = RMSNorm(config.emb_dim)
-        self.attn = SelfAttention(config)
+        self.attn = SlidingWindowSelfAttention(config)
         self.mlp = MLP(config)
     
     def forward(self, x):
@@ -133,7 +100,7 @@ class Block(nn.Module):
         return x
         
 
-class LLama(nn.Module):
+class Mistral(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
@@ -215,9 +182,9 @@ class Config:
     block_size = 30
     batch_size = 32
     iters = 2000
-    dropout = 0.1   
+    dropout = 0.1
+    window_size = block_size // 2
     n_groups = 8
-
 
 config = Config()
 
@@ -226,7 +193,7 @@ train_data = np.memmap(os.path.join("data", 'shakespare_train.bin'), dtype=np.ui
 train_data = np.array(train_data)
 print(train_data.shape)
 trainloader = DataLoader(train_data, config.batch_size, config.block_size)
-model = LLama(config)
+model = Mistral(config)
 model.to(device)
 
 optim = optim.AdamW(model.parameters(), lr=3e-4)
