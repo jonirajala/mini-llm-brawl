@@ -1,2 +1,2 @@
-# JoniGPT
-Learning Transformer architecture and its optimization
+# mini-llm-brawl
+Implementing tiny versions of current state-of-art llms and comparing them on simple task
