@@ -1,11 +1,9 @@
 """
-https://d4mucfpksywv.cloudfront.net/better-language-models/language_models_are_unsupervised_multitask_learners.pdf
+https://arxiv.org/abs/1706.03762
 """
 
 
 import numpy as np
-
-
 from torch import nn
 import torch
 import tiktoken
@@ -21,11 +19,11 @@ class MLP(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
         self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
-        self.gelu = nn.GELU()
+        self.relu = nn.ReLU()
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.gelu(self.fc1(x))
+        x = self.relu(self.fc1(x))
         x = self.fc2(x)
         x = self.dropout(x)
         return x
@@ -74,46 +72,59 @@ class Block(nn.Module):
         self.mlp = MLP(config)
     
     def forward(self, x):
-        x = x + self.attn(self.ln1(x))
-        x = x + self.mlp(self.ln2(x))
+        attn_output = self.attn(x)
+        x = x + attn_output
+        x = self.ln1(x)
+        mlp_output = self.mlp(x)
+        x = x + mlp_output
+        x = self.ln2(x)
         return x
         
+class PositionalEncoding(nn.Module):
+    def __init__(self, emb_dim, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, emb_dim)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, emb_dim, 2).float() * (-math.log(10000.0) / emb_dim))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
 
-class GPT(nn.Module):
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1)]
+        return x
+
+
+class Transformer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
-        self.pos_emb = nn.Embedding(config.block_size, config.emb_dim)
+        self.positional_encoding = PositionalEncoding(config.emb_dim, config.block_size)
 
         self.dropout = nn.Dropout(config.dropout)
         self.config = config
 
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
 
-        self.fc1 = nn.Linear(config.emb_dim, config.vocab_size)
+        self.fc_out = nn.Linear(config.emb_dim, config.vocab_size)
 
         self.ln = nn.LayerNorm(config.emb_dim)
 
-        # self.inp_emb.weight = self.fc1.weight # https://paperswithcode.com/method/weight-tying
+        # self.inp_emb.weight = self.fc_out.weight # https://paperswithcode.com/method/weight-tying
 
     def forward(self, x, y=None):
-        batch, seq_len = x.shape
-        pos = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
-
-        x = self.dropout(self.inp_emb(x) + self.pos_emb(pos))
-
+        x = self.inp_emb(x) * math.sqrt(self.inp_emb.embedding_dim)
+        x = self.positional_encoding(x)
         for block in self.blocks:
             x = block(x)
+        logits = self.fc_out(x)
 
-        x = self.ln(x)
-        logits = self.fc1(x)
-
-        loss = None        
+        loss = None
         if y is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1)
-
         return logits, loss
-    
+
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
         inp = torch.tensor(enc.encode(inp)).to(device)
@@ -173,7 +184,7 @@ train_data = np.memmap(os.path.join("data", 'shakespare_train.bin'), dtype=np.ui
 train_data = np.array(train_data)
 print(train_data.shape)
 trainloader = DataLoader(train_data, config.batch_size, config.block_size)
-model = GPT(config)
+model = Transformer(config)
 model.to(device)
 
 optim = optim.AdamW(model.parameters(), lr=3e-4)
