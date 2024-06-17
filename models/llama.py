@@ -22,6 +22,8 @@ AdamW optimizer
 
 We use a cosine learning rate schedule, such that the final learning rate is equal to 10% of the maximal learning rate. We use a weight decay of 0.1 and gradient clipping of 1.0
 
+no dropout https://github.com/openlm-research/open_llama/issues/22
+
 """
 
 
@@ -67,12 +69,10 @@ class MLP(nn.Module):
         self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
         self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
         self.swiglu = SwiGLU(config.emb_dim, config.emb_dim)
-        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         x = self.swiglu(self.fc1(x))
         x = self.fc2(x)
-        x = self.dropout(x)
         return x
     
 class CausalSelfAttention(nn.Module):
@@ -119,7 +119,6 @@ class Block(nn.Module):
         super().__init__()
         self.rn1 = RMSNorm(config.emb_dim)
         self.rn2 = RMSNorm(config.emb_dim)
-
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
     
@@ -134,7 +133,6 @@ class LLama(nn.Module):
         super().__init__()
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
 
-        self.dropout = nn.Dropout(config.dropout)
         self.config = config
 
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
@@ -147,9 +145,8 @@ class LLama(nn.Module):
 
     def forward(self, x, y=None):
         batch, seq_len = x.shape
-        pos = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
 
-        x = self.dropout(self.inp_emb(x))
+        x = self.inp_emb(x)
 
         for block in self.blocks:
             x = block(x)
