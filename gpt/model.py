@@ -1,4 +1,11 @@
+"""
+https://d4mucfpksywv.cloudfront.net/better-language-models/language_models_are_unsupervised_multitask_learners.pdf
+"""
+
+
 import numpy as np
+
+
 from torch import nn
 import torch
 import tiktoken

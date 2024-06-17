@@ -40,7 +40,6 @@ import matplotlib.pyplot as plt
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
 class SwiGLU(nn.Module):
-    
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
         # Initialize nn.Linear layers with specified input and output dimensions
