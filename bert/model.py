@@ -95,6 +95,7 @@ class Bert(nn.Module):
         super().__init__()
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.pos_emb = nn.Embedding(config.block_size, config.emb_dim)
+        self.seg_emb = nn.Embedding(2, config.emb_dim)
 
         self.dropout = nn.Dropout(config.dropout)
         self.config = config
@@ -102,12 +103,22 @@ class Bert(nn.Module):
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
 
         self.fc1 = nn.Linear(config.emb_dim, config.vocab_size)
+        self.nsp_classifier = nn.Linear(config.emb_dim, 2)  # For NSP classification
 
         self.ln = nn.LayerNorm(config.emb_dim)
 
-        # self.inp_emb.weight = self.fc1.weight # https://paperswithcode.com/method/weight-tying
+        # Weight tying
+        self.inp_emb.weight = self.fc1.weight
 
-    def forward(self, x, attn_mask=None):
+        self.init_weights()
+
+    def init_weights(self):
+        # Initialize weights
+        for param in self.parameters():
+            if param.dim() > 1:
+                nn.init.xavier_uniform_(param)
+                
+    def forward(self, x, seg, attn_mask=None, nsp_labels=None):
         device = x.device  # Ensure device is defined
         batch, seq_len = x.shape
         pos = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
@@ -118,7 +129,7 @@ class Bert(nn.Module):
         else:
             masked_labels = None
 
-        x = self.dropout(self.inp_emb(x) + self.pos_emb(pos))
+        x = self.dropout(self.inp_emb(x) + self.pos_emb(pos) + self.seg_emb(seg))
 
         for block in self.blocks:
             x = block(x, attn_mask)
@@ -126,24 +137,27 @@ class Bert(nn.Module):
         x = self.ln(x)
         logits = self.fc1(x)
 
+        # NSP prediction
+        cls_token_state = x[:, 0]  # BERT uses the first token's representation for NSP
+        nsp_logits = self.nsp_classifier(cls_token_state)
+
         loss = None        
         if self.training:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), masked_labels.view(-1), ignore_index=self.config.pad_token_id)
+            mlm_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), masked_labels.view(-1), ignore_index=self.config.pad_token_id)
+            nsp_loss = F.cross_entropy(nsp_logits, nsp_labels.to(device))
+            loss = mlm_loss + nsp_loss
 
-        return logits, loss
-    
+        return logits, nsp_logits, loss
+
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
         inp = tokenizer(
             inp,
-            # padding='max_length',
-            # truncation=True,
-            # max_length=self.max_length,
             return_tensors="pt"
         ).to(device)
         inp = inp['input_ids'].reshape(1, -1)
         for _ in range(self.config.block_size-inp.shape[1]):
-            logits, _ = self.forward(inp)
+            logits, _, _ = self.forward(inp, torch.zeros_like(inp))
             logits = logits[:, -1, :] / temperature
 
             if top_k is not None:
@@ -193,7 +207,7 @@ class Config:
     vocab_size = tokenizer.vocab_size
     n_layers = 8
     n_head = 8
-    block_size = 30
+    block_size = 128
     batch_size = 32
     iters = 2000
     dropout = 0.1
@@ -209,39 +223,43 @@ class TextDataset(Dataset):
         self.text = text
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.chunks = self.split_into_chunks(text)
+        self.pairs, self.labels = self.create_pairs(text)
 
-    def split_into_chunks(self, text):
-        words = text.split()
-        chunks = []
-        chunk = []
-        current_length = 0
-        for word in words:
-            word_length = len(self.tokenizer.tokenize(word))
-            if current_length + word_length > self.max_length - 2:  # account for special tokens
-                chunks.append(" ".join(chunk))
-                chunk = [word]
-                current_length = word_length
-            else:
-                chunk.append(word)
-                current_length += word_length
-        if chunk:
-            chunks.append(" ".join(chunk))
-        return chunks
+    def create_pairs(self, text):
+        sentences = text.split('.')  # Splitting text into sentences based on period
+        pairs = []
+        labels = []
+        for i in range(len(sentences) - 1):
+            # Create positive example
+            pairs.append((sentences[i], sentences[i + 1]))
+            labels.append(0)
+
+            # Create negative example
+            random_idx = np.random.randint(0, len(sentences))
+            if random_idx != i + 1:
+                pairs.append((sentences[i], sentences[random_idx]))
+                labels.append(1)
+
+        return pairs, labels
 
     def __len__(self):
-        return len(self.chunks)
+        return len(self.pairs)
 
     def __getitem__(self, idx):
-        text = self.chunks[idx]
+        sentence1, sentence2 = self.pairs[idx]
+        label = self.labels[idx]
         encoded = self.tokenizer(
-            text,
+            sentence1, sentence2,
             padding='max_length',
             truncation=True,
             max_length=self.max_length,
             return_tensors="pt"
         )
-        return encoded['input_ids'].squeeze().to(device), encoded['attention_mask'].squeeze().to(device)
+        input_ids = encoded['input_ids'].squeeze().to(device)
+        attention_mask = encoded['attention_mask'].squeeze().to(device)
+        token_type_ids = encoded['token_type_ids'].squeeze().to(device)  # Segment IDs
+
+        return input_ids, attention_mask, token_type_ids, label
 
 
 # Load the corpus
@@ -249,12 +267,11 @@ with open("data/raw_shakespare.txt", 'r', encoding='utf-8') as f:
     corpus = f.read()
 
 # Define the maximum sequence length and batch size
-max_length = 128
 batch_size = 16
-iters = 500
+iters = 5000
 
 # Create the dataset
-dataset = TextDataset(corpus, tokenizer, max_length)
+dataset = TextDataset(corpus, tokenizer, config.block_size)
 
 # Split the dataset into training and validation sets
 train_size = int(0.8 * len(dataset))
@@ -270,13 +287,14 @@ model.to(device)
 
 optim = optim.AdamW(model.parameters(), lr=3e-4)
 
-
 losses = []
 model.train()
 for i in range(iters):
-    x, att_mask = next(iter(train_dataloader))
+    # Get a batch of data
+    x, att_mask, seg, nsp_labels = next(iter(train_dataloader))
+    
     model.zero_grad()
-    out, loss = model(x, att_mask)
+    _, _, loss = model(x, seg, att_mask, nsp_labels)
     loss.backward()
     optim.step()
 
