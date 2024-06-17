@@ -98,7 +98,7 @@ class GPT(nn.Module):
 
     def forward(self, x, y=None):
         batch, seq_len = x.shape
-        pos = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
+        pos = torch.arange(0, seq_len, dtype=torch.long, device=x.device).unsqueeze(0)
 
         x = self.dropout(self.inp_emb(x) + self.pos_emb(pos))
 
@@ -114,91 +114,3 @@ class GPT(nn.Module):
 
         return logits, loss
     
-    @torch.no_grad()
-    def generate(self, inp, temperature=1.0, top_k=None):
-        inp = torch.tensor(enc.encode(inp)).to(device)
-        inp = inp.reshape(1, -1)
-        for _ in range(self.config.block_size-inp.shape[1]):
-            logits, _ = self.forward(inp)
-            logits = logits[:, -1, :] / temperature
-
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-
-            probs = F.softmax(logits, dim=-1)
-
-            inp_next = torch.multinomial(probs, num_samples=1)
-            inp = torch.cat((inp, inp_next), dim=1)
-        
-        return inp[0]
-
-class DataLoader:
-    def __init__(self, data, batch_size, block_size):
-        self.data = data
-
-        self.batch_size = batch_size
-        self.block_size = block_size
-        self.pos = 0
-    
-    def get_batch(self):
-        B, T = self.batch_size, self.block_size
-        batch = self.data[self.pos:self.pos+B*T+1]
-        x = torch.tensor(batch[:-1], dtype=torch.long).reshape(B, T).to(device)
-        y = torch.tensor(batch[1:], dtype=torch.long).reshape(B, T).to(device)
-        self.pos += B * T
-
-        if self.pos + (B*T+1) > len(self.data):
-            self.pos = 0
-
-        return x, y
-
-enc = tiktoken.get_encoding("gpt2")
-device = "mps"
-
-class Config:
-    emb_dim = 512
-    vocab_size = enc.n_vocab
-    n_layers = 8
-    n_head = 8
-    block_size = 30
-    batch_size = 32
-    iters = 2000
-    dropout = 0.1
-
-config = Config()
-
-train_data = np.memmap(os.path.join("data", 'shakespare_train.bin'), dtype=np.uint16, mode='r')
-
-train_data = np.array(train_data)
-print(train_data.shape)
-trainloader = DataLoader(train_data, config.batch_size, config.block_size)
-model = GPT(config)
-model.to(device)
-
-optim = optim.AdamW(model.parameters(), lr=3e-4)
-
-x, y = trainloader.get_batch()
-
-losses = []
-
-pbar = tqdm(range(config.iters), desc="Training Progress")
-for i in pbar:
-    x, y = trainloader.get_batch()
-    model.zero_grad()
-    out, loss = model(x, y)
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optim.step()
-    pbar.set_postfix({"train_loss": loss.item()})
-    losses.append(loss.item())
-
-model.eval()
-gen_text = model.generate("I am ").detach().cpu().numpy()
-print(gen_text)
-gen_text = enc.decode(gen_text)
-print(gen_text)
-
-plt.plot(range(config.iters), losses, label="Training Loss")
-plt.legend()
-plt.show()
