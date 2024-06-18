@@ -74,7 +74,7 @@ class SelfAttention(nn.Module):
         self.Wv = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
         self.Wo = nn.Linear(self.n_heads_q * self.head_dim, config.emb_dim, bias=False)
 
-        self.pos_emb = RotaryPositionalEmbeddings(config.emb_dim // config.n_head, config.block_size)
+        self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
     def repeat_heads(self, x, n_rep):
         batch_size, seq_len, n_kv_heads, head_dim = x.shape

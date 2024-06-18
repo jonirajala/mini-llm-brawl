@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from models import *
 import json
 import argparse
+from datetime import datetime
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -60,10 +61,11 @@ if __name__ == "__main__":
         n_head = 8
         block_size = 128
         batch_size = 32
-        iters = 1000
+        iters = 3
         dropout = 0.1
         window_size = block_size // 2
         n_groups = 8
+        n_kv_heads = 8
 
     config = Config()
 
@@ -75,6 +77,8 @@ if __name__ == "__main__":
     if model_name:
         assert model_name in models, f"Model {model_name} not found"
         models = [model_name]
+
+    all_losses = {}
 
     for model_name in models:
         model = get_model(model_name)
@@ -98,9 +102,7 @@ if __name__ == "__main__":
             pbar.set_postfix({"train_loss": loss.item()})
             losses.append(loss.item())
 
-
-        with open(f'losses_{model_name}.json', 'w') as f:
-            json.dump(losses, f)
+        all_losses[model_name] = losses
 
         model.eval()
         inp = torch.tensor(enc.encode("I am ")).to(device)
@@ -108,6 +110,13 @@ if __name__ == "__main__":
         gen_text = enc.decode(gen_text)
         print(gen_text)
 
-        # plt.plot(range(config.iters), losses, label="Training Loss")
-        # plt.legend()
-        # plt.show()
+    f_name = f'losses/{config.iters}_{datetime.now().strftime('%d-%m')}.json'
+
+    with open(f_name, 'w') as f:
+        json.dump(all_losses, f)
+
+        model.eval()
+        inp = torch.tensor(enc.encode("I am ")).to(device)
+        gen_text = model.generate(inp).detach().cpu().numpy()
+        gen_text = enc.decode(gen_text)
+        print(gen_text)

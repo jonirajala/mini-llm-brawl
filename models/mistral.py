@@ -36,23 +36,45 @@ class MLP(nn.Module):
 class SlidingWindowSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
+
         assert config.emb_dim % config.n_head == 0
-        self.fc_in = nn.Linear(config.emb_dim, config.emb_dim * 3)
-        self.fc_out = nn.Linear(config.emb_dim, config.emb_dim)
-
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-
+        
+        self.n_kv_heads = config.n_kv_heads if config.n_kv_heads is not None else config.n_head
+        self.n_kv_heads = config.n_head
+        self.head_dim = config.emb_dim // config.n_head
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
         self.window_size = config.window_size
         self.n_groups = config.n_groups  # New parameter for Grouped Query Attention
 
-        self.pos_emb = RotaryPositionalEmbeddings(config.emb_dim // config.n_head, config.block_size)
+
+        self.wq = nn.Linear(
+                config.emb_dim,
+                config.n_head * self.head_dim,
+                bias=False
+        )
+        self.wk = nn.Linear(
+            config.emb_dim,
+            self.n_kv_heads * self.head_dim,
+            bias=False
+        )
+        self.wv = nn.Linear(
+            config.emb_dim,
+            self.n_kv_heads * self.head_dim,
+            bias=False
+        )
+        self.wo = nn.Linear(
+            config.n_head * self.head_dim,
+            config.emb_dim,
+            bias=False
+        )
+
+        self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
     def forward(self, x):
         B, T, C = x.shape
-        q, k, v = self.fc_in(x).split(self.emb_dim, dim=2)
+        q, k, v = self.wq(x), self.wk(x), self.wv(x)
+        
         
         # Grouped Query Attention: reduce the number of unique keys and values
         G = self.n_groups
@@ -71,7 +93,6 @@ class SlidingWindowSelfAttention(nn.Module):
 
             att = (q_i @ k_i.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
             y_i = att @ v_i
 
             attn_windows.append(y_i)
@@ -80,7 +101,7 @@ class SlidingWindowSelfAttention(nn.Module):
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)
 
-        y = self.resid_dropout(self.fc_out(y))
+        y = self.wo(y)
 
         return y
 
