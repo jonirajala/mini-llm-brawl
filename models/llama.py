@@ -58,45 +58,70 @@ class SelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.emb_dim % config.n_head == 0
-        self.fc_in = nn.Linear(config.emb_dim, config.emb_dim * 3)
-        self.fc_out = nn.Linear(config.emb_dim, config.emb_dim)
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                    .view(1, 1, config.block_size, config.block_size))
-
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
 
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
-        self.n_groups = config.n_groups  # Number of groups for GQA
+
+        self.n_kv_heads = config.n_head
+
+        self.n_heads_q = config.n_head
+        self.n_rep = self.n_heads_q // self.n_kv_heads
+
+        self.head_dim = config.emb_dim // config.n_head
+
+        self.Wq = nn.Linear(config.emb_dim, self.n_heads_q * self.head_dim, bias=False)
+        self.Wk = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.Wv = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.Wo = nn.Linear(self.n_heads_q * self.head_dim, config.emb_dim, bias=False)
 
         self.pos_emb = RotaryPositionalEmbeddings(config.emb_dim // config.n_head, config.block_size)
-    
+
+    def repeat_heads(self, x, n_rep):
+        batch_size, seq_len, n_kv_heads, head_dim = x.shape
+        if n_rep == 1:
+            return x
+        else:
+            return (x[:, :, :, None, :]
+                    .expand(batch_size, seq_len, n_kv_heads, n_rep, head_dim)
+                    .reshape(batch_size, seq_len, n_kv_heads * n_rep, head_dim)
+                    )
+
     def forward(self, x):
-        B, T, C = x.shape
-        q, k, v = self.fc_in(x).split(self.emb_dim, dim=2)
-        
-        # Grouped Query Attention: reduce the number of unique keys and values
-        G = self.n_groups
-        k = k.view(B, T, G, -1).transpose(1, 2)  # (B, G, T, emb_dim // G)
-        v = v.view(B, T, G, -1).transpose(1, 2)  # (B, G, T, emb_dim // G)
-        
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        batch_size, seq_len, dim = x.shape
+        assert dim == self.emb_dim, "dim must be equal to self.emb_dim"
 
-        q, k = self.pos_emb(q), self.pos_emb(k)
+        # Compute query, key, and value projections
+        xq = self.Wq(x)
+        xk = self.Wk(x)
+        xv = self.Wv(x)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-        y = att @ v
-        
-        y = y.transpose(1, 2).contiguous().view(B, T, C) 
+        # Reshape and add positional embeddings
+        xq = xq.view(batch_size, seq_len, self.n_heads_q, self.head_dim)
+        xk = xk.view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
+        xv = xv.view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
 
-        y = self.resid_dropout(self.fc_out(y))
+        xq = self.pos_emb(xq)
+        xk = self.pos_emb(xk)
 
-        return y
+        # Repeat the heads of K and V to match the number of heads in Q
+        keys = self.repeat_heads(xk, self.n_rep)
+        values = self.repeat_heads(xv, self.n_rep)
 
+        # Compute attention scores and apply attention mechanism
+        xq = xq.transpose(1, 2)
+        keys = keys.transpose(1, 2)
+        values = values.transpose(1, 2)
+
+        scores = torch.matmul(xq, keys.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+
+        context = torch.matmul(scores, values)
+        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+
+        # Apply output projection
+        output = self.Wo(context)
+
+        return output
         
 class Block(nn.Module):
     def __init__(self, config):
