@@ -48,7 +48,7 @@ class MultiQueryAttention(nn.Module):
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
         self.head_dim = config.emb_dim // config.n_head
-        self.num_kv_heads = config.n_kv_heads
+        self.num_kv_heads = 1
 
         assert self.head_dim * config.n_head == self.emb_dim, "emb_dim must be divisible by n_head"
 

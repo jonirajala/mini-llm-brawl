@@ -30,13 +30,13 @@ class MLP(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
         self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
-        self.relu = nn.ReLU()
+        self.relu = nn.GELU()
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
-        x = self.fc2(x)
         x = self.dropout(x)
+        x = self.fc2(x)
         return x
 
 class BidirectionalSelfAttention(nn.Module):
@@ -74,8 +74,6 @@ class BidirectionalSelfAttention(nn.Module):
         y = self.resid_dropout(self.fc_out(y))
 
         return y
-
-
         
 class Block(nn.Module):
     def __init__(self, config):
@@ -119,7 +117,7 @@ class Bert(nn.Module):
             if param.dim() > 1:
                 nn.init.xavier_uniform_(param)
                 
-    def forward(self, x, seg, attn_mask=None, nsp_labels=None):
+    def forward(self, x, seg, attn_mask=None):
         device = x.device  # Ensure device is defined
         batch, seq_len = x.shape
         pos = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
@@ -137,18 +135,12 @@ class Bert(nn.Module):
 
         x = self.ln(x)
         logits = self.fc1(x)
-
-        # NSP prediction
-        cls_token_state = x[:, 0]  # BERT uses the first token's representation for NSP
-        nsp_logits = self.nsp_classifier(cls_token_state)
-
         loss = None        
         if self.training:
             mlm_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), masked_labels.view(-1), ignore_index=self.config.pad_token_id)
-            nsp_loss = F.cross_entropy(nsp_logits, nsp_labels.to(device))
-            loss = mlm_loss + nsp_loss
+            loss = mlm_loss
 
-        return logits, nsp_logits, loss
+        return logits, loss
 
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
@@ -158,7 +150,7 @@ class Bert(nn.Module):
         ).to(device)
         inp = inp['input_ids'].reshape(1, -1)
         for _ in range(self.config.block_size-inp.shape[1]):
-            logits, _, _ = self.forward(inp, torch.zeros_like(inp))
+            logits, _ = self.forward(inp, torch.zeros_like(inp))
             logits = logits[:, -1, :] / temperature
 
             if top_k is not None:
@@ -210,7 +202,7 @@ class Config:
     n_head = 8
     block_size = 128
     batch_size = 32
-    iters = 2000
+    iters = 100
     dropout = 0.1
     mask_token_id = tokenizer.mask_token_id
     pad_token_id = tokenizer.pad_token_id
@@ -260,7 +252,7 @@ class TextDataset(Dataset):
         attention_mask = encoded['attention_mask'].squeeze().to(device)
         token_type_ids = encoded['token_type_ids'].squeeze().to(device)  # Segment IDs
 
-        return input_ids, attention_mask, token_type_ids, label
+        return input_ids, attention_mask, token_type_ids
 
 
 # Load the corpus
@@ -269,7 +261,7 @@ with open("data/raw_shakespare.txt", 'r', encoding='utf-8') as f:
 
 # Define the maximum sequence length and batch size
 batch_size = 16
-iters = 5000
+iters = 500
 
 # Create the dataset
 dataset = TextDataset(corpus, tokenizer, config.block_size)
@@ -292,10 +284,10 @@ losses = []
 model.train()
 for i in range(iters):
     # Get a batch of data
-    x, att_mask, seg, nsp_labels = next(iter(train_dataloader))
+    x, att_mask, seg = next(iter(train_dataloader))
     
     model.zero_grad()
-    _, _, loss = model(x, seg, att_mask, nsp_labels)
+    _, loss = model(x, seg, att_mask)
     loss.backward()
     optim.step()
 

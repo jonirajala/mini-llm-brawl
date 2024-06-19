@@ -58,9 +58,9 @@ if __name__ == "__main__":
         vocab_size = enc.n_vocab
         n_layers = 8
         n_head = 8
-        block_size = 128
+        block_size = 96
         batch_size = 32
-        iters = 1000
+        iters = 100
         dropout = 0.1
         window_size = block_size // 2
         n_groups = 8
