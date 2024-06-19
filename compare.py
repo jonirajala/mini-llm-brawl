@@ -43,7 +43,7 @@ if __name__ == '__main__':
         plt.plot(model_losses, label=f"{model} train loss")
 
     for model, val_model_losses in all_val_losses.items():
-        plt.plot([i*10 for i in range(len(val_model_losses))], val_model_losses, label=f"{model} val loss", linestyle='--')
+        plt.plot([i*50 for i in range(len(val_model_losses))], val_model_losses, label=f"{model} val loss", linestyle='--')
 
     plt.title('Model Training and Validation Losses')
     plt.xlabel('Iteration')
