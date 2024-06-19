@@ -58,8 +58,9 @@ class SlidingWindowSelfAttention(nn.Module):
     def _create_sliding_window_bias(self, block_size, window_size):
         bias = torch.zeros(block_size, block_size)
         for i in range(block_size):
-            for j in range(max(0, i - window_size // 2), min(block_size, i + window_size // 2 + 1)):
-                bias[i, j] = 1
+            start = max(0, i - window_size)
+            end = i + 1  # Token can only attend to tokens in the past
+            bias[i, start:end] = 1
         return bias.view(1, 1, block_size, block_size)
 
     def repeat_heads(self, x, n_rep):
