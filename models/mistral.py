@@ -19,21 +19,23 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        scaled_hidden = int(2/3 * 4 * config.emb_dim)
+        scaled_hidden = int(2 / 3 * 4 * config.emb_dim)
         self.fc1 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
         self.fc2 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
         self.fc3 = nn.Linear(scaled_hidden, config.emb_dim, bias=False)
-    
+
     def forward(self, x):
         x1 = self.fc1(x)
         x2 = self.fc2(x)
         hidden = F.silu(x1)
         hidden = hidden * x2
         return self.fc3(hidden)
-    
+
+
 class SlidingWindowSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -42,7 +44,9 @@ class SlidingWindowSelfAttention(nn.Module):
         self.emb_dim = config.emb_dim
         self.n_heads_q = config.n_head  # Number of query heads
         self.n_kv_heads = config.n_kv_heads  # Number of key/value heads
-        self.n_rep = self.n_heads_q // self.n_kv_heads  # Repetitions to match query heads
+        self.n_rep = (
+            self.n_heads_q // self.n_kv_heads
+        )  # Repetitions to match query heads
 
         self.head_dim = config.emb_dim // self.n_heads_q
 
@@ -51,7 +55,10 @@ class SlidingWindowSelfAttention(nn.Module):
         self.Wv = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
         self.Wo = nn.Linear(self.n_heads_q * self.head_dim, config.emb_dim, bias=False)
 
-        self.register_buffer("bias", self._create_sliding_window_bias(config.block_size, config.window_size))
+        self.register_buffer(
+            "bias",
+            self._create_sliding_window_bias(config.block_size, config.window_size),
+        )
 
         self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
@@ -68,10 +75,11 @@ class SlidingWindowSelfAttention(nn.Module):
         if n_rep == 1:
             return x
         else:
-            return (x[:, :, :, None, :]
-                    .expand(batch_size, seq_len, n_kv_heads, n_rep, head_dim)
-                    .reshape(batch_size, seq_len, n_kv_heads * n_rep, head_dim)
-                    )
+            return (
+                x[:, :, :, None, :]
+                .expand(batch_size, seq_len, n_kv_heads, n_rep, head_dim)
+                .reshape(batch_size, seq_len, n_kv_heads * n_rep, head_dim)
+            )
 
     def forward(self, x):
         batch_size, seq_len, dim = x.shape
@@ -100,7 +108,9 @@ class SlidingWindowSelfAttention(nn.Module):
         values = values.transpose(1, 2)
 
         scores = torch.matmul(xq, keys.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        scores = scores.masked_fill(self.bias[:,:,:seq_len,:seq_len] == 0, float('-inf'))
+        scores = scores.masked_fill(
+            self.bias[:, :, :seq_len, :seq_len] == 0, float("-inf")
+        )
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
 
         context = torch.matmul(scores, values)
@@ -111,6 +121,7 @@ class SlidingWindowSelfAttention(nn.Module):
 
         return output
 
+
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -118,12 +129,13 @@ class Block(nn.Module):
         self.rn2 = RMSNorm(config.emb_dim)
         self.attn = SlidingWindowSelfAttention(config)
         self.mlp = MLP(config)
-    
+
     def forward(self, x):
         x = x + self.attn(self.rn1(x))
         x = x + self.mlp(self.rn2(x))
         return x
-        
+
+
 class Mistral(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -141,11 +153,13 @@ class Mistral(nn.Module):
             x = block(x)
         x = self.rmsnorm(x)
         logits = self.fc_out(x)
-        loss = None        
+        loss = None
         if y is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1
+            )
         return logits, loss
-    
+
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
         inp = inp.reshape(1, -1)
@@ -154,7 +168,7 @@ class Mistral(nn.Module):
             logits = logits[:, -1, :] / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
+                logits[logits < v[:, [-1]]] = -float("Inf")
             probs = F.softmax(logits, dim=-1)
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)

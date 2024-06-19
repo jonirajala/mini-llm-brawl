@@ -3,17 +3,23 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 
+
 def get_latest_file(directory):
-    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-    files = [f for f in files if f.endswith('.json')]
+    files = [
+        f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))
+    ]
+    files = [f for f in files if f.endswith(".json")]
     if not files:
         return None
     latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(directory, x)))
     return latest_file
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load a specific run.")
-    parser.add_argument("file_name", nargs='?', help="Name of the run to load", default=None)
+    parser.add_argument(
+        "file_name", nargs="?", help="Name of the run to load", default=None
+    )
     args = parser.parse_args()
     file_name = args.file_name
 
@@ -29,7 +35,7 @@ if __name__ == '__main__':
 
     # Load all losses from the single file
     try:
-        with open(file_name, 'r') as f:
+        with open(file_name, "r") as f:
             all_data = json.load(f)
             all_losses = all_data.get("train_losses", {})
             all_val_losses = all_data.get("val_losses", {})
@@ -43,11 +49,16 @@ if __name__ == '__main__':
         plt.plot(model_losses, label=f"{model} train loss")
 
     for model, val_model_losses in all_val_losses.items():
-        plt.plot([i*50 for i in range(len(val_model_losses))], val_model_losses, label=f"{model} val loss", linestyle='--')
+        plt.plot(
+            [i * 50 for i in range(len(val_model_losses))],
+            val_model_losses,
+            label=f"{model} val loss",
+            linestyle="--",
+        )
 
-    plt.title('Model Training and Validation Losses')
-    plt.xlabel('Iteration')
-    plt.ylabel('Loss')
+    plt.title("Model Training and Validation Losses")
+    plt.xlabel("Iteration")
+    plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
     plt.show()

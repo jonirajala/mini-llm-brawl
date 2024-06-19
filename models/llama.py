@@ -32,15 +32,16 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         # Initialize nn.Linear layers with specified input and output dimensions
-        scaled_hidden = int(2/3 * 4 * config.emb_dim)
+        scaled_hidden = int(2 / 3 * 4 * config.emb_dim)
         self.fc1 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
         self.fc2 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
         self.fc3 = nn.Linear(scaled_hidden, config.emb_dim, bias=False)
-    
+
     def forward(self, x):
         # Linear transformation with the first layer
         x1 = self.fc1(x)
@@ -53,42 +54,28 @@ class MLP(nn.Module):
         # Final linear transformation with the third layer
         return self.fc3(hidden)
 
-    
-class SelfAttention(nn.Module):
+
+class MultiHeadSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.emb_dim % config.n_head == 0
-
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
-
-        self.n_kv_heads = config.n_head
-
-        self.n_heads_q = config.n_head
-        self.n_rep = self.n_heads_q // self.n_kv_heads
-
         self.head_dim = config.emb_dim // config.n_head
 
-        self.Wq = nn.Linear(config.emb_dim, self.n_heads_q * self.head_dim, bias=False)
-        self.Wk = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.Wv = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.Wo = nn.Linear(self.n_heads_q * self.head_dim, config.emb_dim, bias=False)
+        self.Wq = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
+        self.Wk = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
+        self.Wv = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
+        self.Wo = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
 
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                    .view(1, 1, config.block_size, config.block_size))
-
+        self.register_buffer(
+            "bias",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                1, 1, config.block_size, config.block_size
+            ),
+        )
 
         self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
-
-    def repeat_heads(self, x, n_rep):
-        batch_size, seq_len, n_kv_heads, head_dim = x.shape
-        if n_rep == 1:
-            return x
-        else:
-            return (x[:, :, :, None, :]
-                    .expand(batch_size, seq_len, n_kv_heads, n_rep, head_dim)
-                    .reshape(batch_size, seq_len, n_kv_heads * n_rep, head_dim)
-                    )
 
     def forward(self, x):
         batch_size, seq_len, dim = x.shape
@@ -100,24 +87,22 @@ class SelfAttention(nn.Module):
         xv = self.Wv(x)
 
         # Reshape and add positional embeddings
-        xq = xq.view(batch_size, seq_len, self.n_heads_q, self.head_dim)
-        xk = xk.view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
-        xv = xv.view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
+        xq = xq.view(batch_size, seq_len, self.n_head, self.head_dim)
+        xk = xk.view(batch_size, seq_len, self.n_head, self.head_dim)
+        xv = xv.view(batch_size, seq_len, self.n_head, self.head_dim)
 
         xq = self.pos_emb(xq)
         xk = self.pos_emb(xk)
 
-        # Repeat the heads of K and V to match the number of heads in Q
-        keys = self.repeat_heads(xk, self.n_rep)
-        values = self.repeat_heads(xv, self.n_rep)
-
         # Compute attention scores and apply attention mechanism
         xq = xq.transpose(1, 2)
-        keys = keys.transpose(1, 2)
-        values = values.transpose(1, 2)
+        keys = xk.transpose(1, 2)
+        values = xv.transpose(1, 2)
 
         scores = torch.matmul(xq, keys.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        scores = scores.masked_fill(self.bias[:,:,:seq_len,:seq_len] == 0, float('-inf'))
+        scores = scores.masked_fill(
+            self.bias[:, :, :seq_len, :seq_len] == 0, float("-inf")
+        )
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
 
         context = torch.matmul(scores, values)
@@ -127,20 +112,21 @@ class SelfAttention(nn.Module):
         output = self.Wo(context)
 
         return output
-        
+
+
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.rn1 = RMSNorm(config.emb_dim)
         self.rn2 = RMSNorm(config.emb_dim)
-        self.attn = SelfAttention(config)
+        self.attn = MultiHeadSelfAttention(config)
         self.mlp = MLP(config)
-    
+
     def forward(self, x):
         x = x + self.attn(self.rn1(x))
         x = x + self.mlp(self.rn2(x))
         return x
-        
+
 
 class LLama(nn.Module):
     def __init__(self, config):
@@ -168,26 +154,28 @@ class LLama(nn.Module):
         x = self.rmsnorm(x)
         logits = self.fc_out(x)
 
-        loss = None        
+        loss = None
         if y is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1
+            )
 
         return logits, loss
-    
+
     @torch.no_grad()
     def generate(self, inp, temperature=1.0, top_k=None):
         inp = inp.reshape(1, -1)
-        for _ in range(self.config.block_size-inp.shape[1]):
+        for _ in range(self.config.block_size - inp.shape[1]):
             logits, _ = self.forward(inp)
             logits = logits[:, -1, :] / temperature
 
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
+                logits[logits < v[:, [-1]]] = -float("Inf")
 
             probs = F.softmax(logits, dim=-1)
 
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)
-        
+
         return inp[0]
