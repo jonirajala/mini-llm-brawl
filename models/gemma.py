@@ -19,48 +19,28 @@ RMSNorm. We normalize the input of each transformer sub-layer, the attention lay
 """
 
 
-import numpy as np
 from torch import nn
 import torch
-import tiktoken
-import os
 import math
 from torch.nn import functional as F
-from torch import optim
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
-
-
-class GEGLU(nn.Module):
-    """
-    References:
-        Shazeer et al., "GLU Variants Improve Transformer," 2020.
-        https://arxiv.org/abs/2002.05202
-    """
-
-    def geglu(self, x):
-        assert x.shape[-1] % 2 == 0
-        a, b = x.chunk(2, dim=-1)
-        return a * F.gelu(b)
-
-    def forward(self, x):
-        return self.geglu(x)
 
 
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.fc1 = nn.Linear(config.emb_dim, config.emb_dim) 
-        self.fc2 = nn.Linear(config.emb_dim // 2, config.emb_dim)
-        self.geglu = GEGLU()
-        self.dropout = nn.Dropout(config.dropout)
+        self.fc_gate = nn.Linear(config.emb_dim, config.emb_dim // 2) 
+        self.fc_up = nn.Linear(config.emb_dim, config.emb_dim // 2)
+        self.fc_down = nn.Linear(config.emb_dim // 2, config.emb_dim)
 
     def forward(self, x):
-        x = self.geglu(self.fc1(x))
-        x = self.fc2(x)
-        x = self.dropout(x)
-        return x
+        gate = self.fc_gate(x)
+        gate = F.gelu(gate, approximate='tanh')
+        up = self.fc_up(x)
+        fuse = gate * up
+        y = self.fc_down(fuse)
+        return y
+    
     
 class MultiQueryAttention(nn.Module):
     def __init__(self, config):
@@ -68,13 +48,15 @@ class MultiQueryAttention(nn.Module):
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
         self.head_dim = config.emb_dim // config.n_head
+        self.num_kv_heads = config.n_kv_heads
 
         assert self.head_dim * config.n_head == self.emb_dim, "emb_dim must be divisible by n_head"
 
-        self.q_proj = nn.Linear(config.emb_dim, config.emb_dim)
-        self.k_proj = nn.Linear(config.emb_dim, self.head_dim)  # Shared key
-        self.v_proj = nn.Linear(config.emb_dim, self.head_dim)  # Shared value
-        self.out_proj = nn.Linear(config.emb_dim, config.emb_dim)
+        self.q_size = self.n_head * self.head_dim
+        self.kv_size = self.num_kv_heads * self.head_dim
+
+        self.qkv_proj = nn.Linear(self.emb_dim, (self.n_head + 2 * self.num_kv_heads) * self.head_dim)
+        self.out_proj = nn.Linear(self.n_head * self.head_dim, self.emb_dim)
 
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                     .view(1, 1, config.block_size, config.block_size))
@@ -86,15 +68,22 @@ class MultiQueryAttention(nn.Module):
         batch_size, seq_len, emb_dim = x.size()
 
         # Linear projections
-        q = self.q_proj(x).view(batch_size, seq_len, self.n_head, self.head_dim)
-        k = self.k_proj(x).view(batch_size, seq_len, 1, self.head_dim)  # Shared key
-        v = self.v_proj(x).view(batch_size, seq_len, 1, self.head_dim)  # Shared value
+        qkv = self.qkv_proj(x)
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size],
+                               dim=-1)
 
-        q = q.permute(0, 2, 1, 3)  # (batch_size, n_head, seq_len, head_dim)
-        k = k.permute(0, 2, 1, 3)  # (batch_size, 1, seq_len, head_dim)
-        v = v.permute(0, 2, 1, 3)  # (batch_size, 1, seq_len, head_dim)
+        q = q.view(batch_size, -1, self.n_head, self.head_dim)
+        k = k.view(batch_size, -1, self.num_kv_heads, self.head_dim)
+        v = v.view(batch_size, -1, self.num_kv_heads, self.head_dim)
+
 
         q, k = self.pos_emb(q), self.pos_emb(k)
+
+        # [batch_size, n_local_heads, input_len, head_dim]
+        q = q.transpose(1, 2)
+        # [batch_size, n_local_heads, max_seq_len, head_dim]
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
 
         # Scaled dot-product attention
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
@@ -108,7 +97,6 @@ class MultiQueryAttention(nn.Module):
         output = self.out_proj(attn_output)
 
         return output
-
         
 class Block(nn.Module):
     def __init__(self, config):

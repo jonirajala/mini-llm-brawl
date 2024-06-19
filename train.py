@@ -60,7 +60,7 @@ if __name__ == "__main__":
         n_head = 8
         block_size = 128
         batch_size = 32
-        iters = 500
+        iters = 1000
         dropout = 0.1
         window_size = block_size // 2
         n_groups = 8
