@@ -3,16 +3,10 @@ https://arxiv.org/abs/1706.03762
 """
 
 
-import numpy as np
 from torch import nn
 import torch
-import tiktoken
-import os
 import math
 from torch.nn import functional as F
-from torch import optim
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 class MLP(nn.Module):
     def __init__(self, config):

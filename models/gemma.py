@@ -76,6 +76,9 @@ class MultiQueryAttention(nn.Module):
         self.v_proj = nn.Linear(config.emb_dim, self.head_dim)  # Shared value
         self.out_proj = nn.Linear(config.emb_dim, config.emb_dim)
 
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                    .view(1, 1, config.block_size, config.block_size))
+
         self.pos_emb = RotaryPositionalEmbeddings(config.emb_dim // config.n_head, config.block_size)
 
 
@@ -95,6 +98,7 @@ class MultiQueryAttention(nn.Module):
 
         # Scaled dot-product attention
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn_scores = attn_scores.masked_fill(self.bias[:,:,:seq_len,:seq_len] == 0, float('-inf'))
         attn_weights = F.softmax(attn_scores, dim=-1)
         attn_output = torch.matmul(attn_weights, v)
 

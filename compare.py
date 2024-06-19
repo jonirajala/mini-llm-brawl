@@ -20,7 +20,7 @@ if __name__ == '__main__':
     if file_name is None:
         latest_file = get_latest_file("losses")
         if latest_file:
-            file_name = "losses/" + latest_file + ".json"
+            file_name = "losses/" + latest_file
         else:
             print("No loss files found in the losses directory.")
             exit(1)
@@ -30,17 +30,22 @@ if __name__ == '__main__':
     # Load all losses from the single file
     try:
         with open(file_name, 'r') as f:
-            all_losses = json.load(f)
+            all_data = json.load(f)
+            all_losses = all_data.get("train_losses", {})
+            all_val_losses = all_data.get("val_losses", {})
     except FileNotFoundError:
         print(f"File {file_name} not found.")
         exit(0)
 
-    # Plot the losses
-    plt.figure(figsize=(10, 6))
+    # Plot the training losses
+    plt.figure(figsize=(12, 6))
     for model, model_losses in all_losses.items():
-        plt.plot(model_losses, label=model)
+        plt.plot(model_losses, label=f"{model} train loss")
 
-    plt.title('Model Training Losses')
+    for model, val_model_losses in all_val_losses.items():
+        plt.plot([i*10 for i in range(len(val_model_losses))], val_model_losses, label=f"{model} val loss", linestyle='--')
+
+    plt.title('Model Training and Validation Losses')
     plt.xlabel('Iteration')
     plt.ylabel('Loss')
     plt.legend()

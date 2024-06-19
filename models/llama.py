@@ -74,6 +74,10 @@ class SelfAttention(nn.Module):
         self.Wv = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
         self.Wo = nn.Linear(self.n_heads_q * self.head_dim, config.emb_dim, bias=False)
 
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                    .view(1, 1, config.block_size, config.block_size))
+
+
         self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
     def repeat_heads(self, x, n_rep):
@@ -113,6 +117,7 @@ class SelfAttention(nn.Module):
         values = values.transpose(1, 2)
 
         scores = torch.matmul(xq, keys.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        scores = scores.masked_fill(self.bias[:,:,:seq_len,:seq_len] == 0, float('-inf'))
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
 
         context = torch.matmul(scores, values)

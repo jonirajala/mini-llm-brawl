@@ -61,7 +61,7 @@ if __name__ == "__main__":
         n_head = 8
         block_size = 128
         batch_size = 32
-        iters = 3
+        iters = 1000
         dropout = 0.1
         window_size = block_size // 2
         n_groups = 8
@@ -72,13 +72,18 @@ if __name__ == "__main__":
     train_data = np.memmap(os.path.join("data", 'shakespare_train.bin'), dtype=np.uint16, mode='r')
     train_data = np.array(train_data)
 
+    val_data = np.memmap(os.path.join("data", 'shakespare_val.bin'), dtype=np.uint16, mode='r')
+    val_data = np.array(val_data)
+
 
     models = ["gpt", "llama", "mistral", "baseline_transformer", "gemma"]
     if model_name:
         assert model_name in models, f"Model {model_name} not found"
         models = [model_name]
 
-    all_losses = {}
+    all_train_losses = {}
+    all_val_losses = {}
+
 
     for model_name in models:
         model = get_model(model_name)
@@ -88,8 +93,10 @@ if __name__ == "__main__":
 
         optimizer = optim.AdamW(model.parameters(), lr=3e-4)
         trainloader = DataLoader(train_data, config.batch_size, config.block_size)
+        valloader = DataLoader(val_data, config.batch_size, config.block_size)
 
-        losses = []
+        train_losses = []
+        val_losses = []
         model.train()
         pbar = tqdm(range(config.iters), desc="Training Progress")
         for i in pbar:
@@ -100,9 +107,18 @@ if __name__ == "__main__":
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             pbar.set_postfix({"train_loss": loss.item()})
-            losses.append(loss.item())
+            train_losses.append(loss.item())
 
-        all_losses[model_name] = losses
+            if i % 50 == 0:
+                model.eval()
+                val_x, val_y = valloader.get_batch()
+                with torch.no_grad():
+                    val_out, val_loss = model(val_x, val_y)
+                val_losses.append(val_loss.item())
+                model.train()
+
+        all_train_losses[model_name] = train_losses
+        all_val_losses[model_name] = val_losses
 
         model.eval()
         inp = torch.tensor(enc.encode("I am ")).to(device)
@@ -110,10 +126,11 @@ if __name__ == "__main__":
         gen_text = enc.decode(gen_text)
         print(gen_text)
 
-    f_name = f'losses/{config.iters}_{datetime.now().strftime('%d-%m')}.json'
 
+    f_name = f'losses/{config.iters}_{datetime.now().strftime('%d-%m')}.json'
+    os.makedirs('losses', exist_ok=True)
     with open(f_name, 'w') as f:
-        json.dump(all_losses, f)
+        json.dump({"train_losses": all_train_losses, "val_losses": all_val_losses}, f)
 
         model.eval()
         inp = torch.tensor(enc.encode("I am ")).to(device)

@@ -45,8 +45,7 @@ class SlidingWindowSelfAttention(nn.Module):
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
         self.window_size = config.window_size
-        self.n_groups = config.n_groups  # New parameter for Grouped Query Attention
-
+        self.n_groups = config.n_groups 
 
         self.wq = nn.Linear(
                 config.emb_dim,
@@ -68,6 +67,7 @@ class SlidingWindowSelfAttention(nn.Module):
             config.emb_dim,
             bias=False
         )
+        
 
         self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
@@ -98,9 +98,7 @@ class SlidingWindowSelfAttention(nn.Module):
             attn_windows.append(y_i)
 
         y = torch.cat(attn_windows, dim=2)  # concatenate the windows along the sequence length
-
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-
         y = self.wo(y)
 
         return y
