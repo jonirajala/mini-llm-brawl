@@ -127,11 +127,11 @@ class Mistral(nn.Module):
 
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
 
-        self.fc1 = nn.Linear(config.emb_dim, config.vocab_size)
+        self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
 
         self.rmsnorm = RMSNorm(config.emb_dim)
 
-        # self.inp_emb.weight = self.fc1.weight # https://paperswithcode.com/method/weight-tying
+        # self.inp_emb.weight = self.fc_out.weight # https://paperswithcode.com/method/weight-tying
 
     def forward(self, x, y=None):
         batch, seq_len = x.shape
@@ -142,7 +142,7 @@ class Mistral(nn.Module):
             x = block(x)
 
         x = self.rmsnorm(x)
-        logits = self.fc1(x)
+        logits = self.fc_out(x)
 
         loss = None        
         if y is not None:

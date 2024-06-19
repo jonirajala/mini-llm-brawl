@@ -101,7 +101,7 @@ class Transformer(nn.Module):
 
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
 
-        self.fc_out = nn.Linear(config.emb_dim, config.vocab_size)
+        self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
 
         self.ln = nn.LayerNorm(config.emb_dim)
 
