@@ -7,7 +7,29 @@ import torch
 import math
 from torch.nn import functional as F
 
+class Config:
+    emb_dim = 432
+    n_layers = 8
+    n_head = 8
+    n_groups = 8
+    n_kv_heads = 8
 
+    def __init__(self, config):
+        self.config = config
+        if config.param_count == 50:
+            emb_dim = 432
+        elif config.param_count == 75:
+            emb_dim = 576
+
+        setattr(self, "emb_dim", emb_dim)
+
+
+    def __getattr__(self, name):
+        # Return attributes from self.config if not found in self
+        if hasattr(self.config, name):
+            return getattr(self.config, name)
+        raise AttributeError(f"'Config_50' object has no attribute '{name}'")
+    
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -104,8 +126,10 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, glob_config):
         super().__init__()
+        config = Config(glob_config)
+
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.positional_encoding = PositionalEncoding(config.emb_dim, config.block_size)
 

@@ -57,19 +57,15 @@ if __name__ == "__main__":
 
     enc = tiktoken.get_encoding("gpt2")
     device = "mps"
-
+    
     class Config:
-        emb_dim = 512
         vocab_size = enc.n_vocab
-        n_layers = 8
-        n_head = 8
         block_size = 96
-        batch_size = 32
-        iters = 3
-        dropout = 0.1
         window_size = block_size // 2
-        n_groups = 8
-        n_kv_heads = 8
+        batch_size = 32
+        iters = 1000
+        dropout = 0.1
+        param_count = 75
 
     config = Config()
 
@@ -140,7 +136,7 @@ if __name__ == "__main__":
         print(f"Model saved to {model_save_path}")
 
         model.eval()
-        inp = torch.tensor(enc.encode("Turku on ")).to(device)
+        inp = torch.tensor(enc.encode("And that is  ")).to(device)
         gen_text = model.generate(inp).detach().cpu().numpy()
         gen_text = enc.decode(gen_text)
         print(gen_text)
