@@ -19,12 +19,11 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
+
 class Config:
     emb_dim = 384
     n_layers = 8
     n_head = 8
-    n_groups = 8
-    n_kv_heads = 8
 
     def __init__(self, config):
         self.config = config
@@ -35,13 +34,14 @@ class Config:
 
         setattr(self, "emb_dim", emb_dim)
 
-
     def __getattr__(self, name):
         # Return attributes from self.config if not found in self
         if hasattr(self.config, name):
             return getattr(self.config, name)
         raise AttributeError(f"'Config_50' object has no attribute '{name}'")
 
+
+# Geglu
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -69,26 +69,23 @@ class SlidingWindowSelfAttention(nn.Module):
         self.n_rep = (
             self.n_heads_q // self.n_kv_heads
         )  # Repetitions to match query heads
-
         self.head_dim = config.emb_dim // self.n_heads_q
 
         self.Wq = nn.Linear(config.emb_dim, self.n_heads_q * self.head_dim, bias=False)
         self.Wk = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
         self.Wv = nn.Linear(config.emb_dim, self.n_kv_heads * self.head_dim, bias=False)
         self.Wo = nn.Linear(self.n_heads_q * self.head_dim, config.emb_dim, bias=False)
-
         self.register_buffer(
             "bias",
             self._create_sliding_window_bias(config.block_size, config.window_size),
         )
-
         self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
     def _create_sliding_window_bias(self, block_size, window_size):
         bias = torch.zeros(block_size, block_size)
         for i in range(block_size):
             start = max(0, i - window_size)
-            end = i + 1  # Token can only attend to tokens in the past
+            end = i + 1
             bias[i, start:end] = 1
         return bias.view(1, 1, block_size, block_size)
 
@@ -107,12 +104,10 @@ class SlidingWindowSelfAttention(nn.Module):
         batch_size, seq_len, dim = x.shape
         assert dim == self.emb_dim, "dim must be equal to self.emb_dim"
 
-        # Compute query, key, and value projections
         xq = self.Wq(x)
         xk = self.Wk(x)
         xv = self.Wv(x)
 
-        # Reshape and add positional embeddings
         xq = xq.view(batch_size, seq_len, self.n_heads_q, self.head_dim)
         xk = xk.view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
         xv = xv.view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
@@ -120,11 +115,9 @@ class SlidingWindowSelfAttention(nn.Module):
         xq = self.pos_emb(xq)
         xk = self.pos_emb(xk)
 
-        # Repeat the heads of K and V to match the number of heads in Q
         keys = self.repeat_heads(xk, self.n_rep)
         values = self.repeat_heads(xv, self.n_rep)
 
-        # Compute attention scores and apply attention mechanism
         xq = xq.transpose(1, 2)
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
@@ -134,11 +127,9 @@ class SlidingWindowSelfAttention(nn.Module):
             self.bias[:, :, :seq_len, :seq_len] == 0, float("-inf")
         )
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-
         context = torch.matmul(scores, values)
-        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
 
-        # Apply output projection
+        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
         output = self.Wo(context)
 
         return output
@@ -162,9 +153,9 @@ class Mistral(nn.Module):
     def __init__(self, glob_config):
         super().__init__()
         config = Config(glob_config)
-        
-        self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.config = config
+
+        self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
         self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
         self.rmsnorm = RMSNorm(config.emb_dim)

@@ -1,5 +1,6 @@
 """
 https://arxiv.org/abs/1706.03762
+Basic transformer solely based on the attention is all you need papaer
 """
 
 from torch import nn
@@ -7,12 +8,10 @@ import torch
 import math
 from torch.nn import functional as F
 
+
 class Config:
     emb_dim = 432
-    n_layers = 8
     n_head = 8
-    n_groups = 8
-    n_kv_heads = 8
 
     def __init__(self, config):
         self.config = config
@@ -20,16 +19,15 @@ class Config:
             emb_dim = 432
         elif config.param_count == 75:
             emb_dim = 576
-
         setattr(self, "emb_dim", emb_dim)
-
 
     def __getattr__(self, name):
         # Return attributes from self.config if not found in self
         if hasattr(self.config, name):
             return getattr(self.config, name)
-        raise AttributeError(f"'Config_50' object has no attribute '{name}'")
-    
+        raise AttributeError(f"'Config' object has no attribute '{name}'")
+
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -49,6 +47,9 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.emb_dim % config.n_head == 0
+        self.emb_dim = config.emb_dim
+        self.n_head = config.n_head
+
         self.fc_in = nn.Linear(config.emb_dim, config.emb_dim * 3)
         self.fc_out = nn.Linear(config.emb_dim, config.emb_dim)
         self.register_buffer(
@@ -57,12 +58,8 @@ class CausalSelfAttention(nn.Module):
                 1, 1, config.block_size, config.block_size
             ),
         )
-
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-
-        self.emb_dim = config.emb_dim
-        self.n_head = config.n_head
 
     def forward(self, x):
         B, T, C = x.shape
@@ -84,10 +81,10 @@ class CausalSelfAttention(nn.Module):
         y = att @ v
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-
         y = self.resid_dropout(self.fc_out(y))
 
         return y
+
 
 class Block(nn.Module):
     def __init__(self, config):
@@ -129,17 +126,12 @@ class Transformer(nn.Module):
     def __init__(self, glob_config):
         super().__init__()
         config = Config(glob_config)
-
+        self.config = config
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.positional_encoding = PositionalEncoding(config.emb_dim, config.block_size)
-
         self.dropout = nn.Dropout(config.dropout)
-        self.config = config
-
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
-
         self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
-
         self.ln = nn.LayerNorm(config.emb_dim)
 
         # self.inp_emb.weight = self.fc_out.weight # https://paperswithcode.com/method/weight-tying
@@ -164,13 +156,10 @@ class Transformer(nn.Module):
         for _ in range(self.config.block_size - inp.shape[1]):
             logits, _ = self.forward(inp)
             logits = logits[:, -1, :] / temperature
-
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
-
             probs = F.softmax(logits, dim=-1)
-
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)
 

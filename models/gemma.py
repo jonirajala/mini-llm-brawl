@@ -24,12 +24,11 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
+
 class Config:
     emb_dim = 384
     n_layers = 8
     n_head = 8
-    n_groups = 8
-    n_kv_heads = 8
 
     def __init__(self, config):
         self.config = config
@@ -44,6 +43,7 @@ class Config:
         if hasattr(self.config, name):
             return getattr(self.config, name)
         raise AttributeError(f"'Config_50' object has no attribute '{name}'")
+
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -64,15 +64,14 @@ class MLP(nn.Module):
 class MultiQueryAttention(nn.Module):
     def __init__(self, config):
         super(MultiQueryAttention, self).__init__()
-        self.emb_dim = config.emb_dim
-        self.n_head = config.n_head
-        self.head_dim = config.emb_dim // config.n_head
-        self.num_kv_heads = 1
-
         assert (
             self.head_dim * config.n_head == self.emb_dim
         ), "emb_dim must be divisible by n_head"
 
+        self.emb_dim = config.emb_dim
+        self.n_head = config.n_head
+        self.head_dim = config.emb_dim // config.n_head
+        self.num_kv_heads = 1  # based on paper
         self.q_size = self.n_head * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
 
@@ -80,14 +79,12 @@ class MultiQueryAttention(nn.Module):
             self.emb_dim, (self.n_head + 2 * self.num_kv_heads) * self.head_dim
         )
         self.out_proj = nn.Linear(self.n_head * self.head_dim, self.emb_dim)
-
         self.register_buffer(
             "bias",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
                 1, 1, config.block_size, config.block_size
             ),
         )
-
         self.pos_emb = RotaryPositionalEmbeddings(
             config.emb_dim // config.n_head, config.block_size
         )
@@ -95,7 +92,6 @@ class MultiQueryAttention(nn.Module):
     def forward(self, x):
         batch_size, seq_len, emb_dim = x.size()
 
-        # Linear projections
         qkv = self.qkv_proj(x)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
@@ -105,13 +101,10 @@ class MultiQueryAttention(nn.Module):
 
         q, k = self.pos_emb(q), self.pos_emb(k)
 
-        # [batch_size, n_local_heads, input_len, head_dim]
-        q = q.transpose(1, 2)
-        # [batch_size, n_local_heads, max_seq_len, head_dim]
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        q = q.transpose(1, 2)  # [batch_size, n_local_heads, input_len, head_dim]
+        k = k.transpose(1, 2)  # [batch_size, n_local_heads, max_seq_len, head_dim]
+        v = v.transpose(1, 2)  # [batch_size, n_local_heads, max_seq_len, head_dim]
 
-        # Scaled dot-product attention
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         attn_scores = attn_scores.masked_fill(
             self.bias[:, :, :seq_len, :seq_len] == 0, float("-inf")
@@ -124,10 +117,7 @@ class MultiQueryAttention(nn.Module):
             .contiguous()
             .view(batch_size, seq_len, emb_dim)
         )
-
-        # Output projection
         output = self.out_proj(attn_output)
-
         return output
 
 
@@ -136,7 +126,6 @@ class Block(nn.Module):
         super().__init__()
         self.rn1 = RMSNorm(config.emb_dim)
         self.rn2 = RMSNorm(config.emb_dim)
-
         self.attn = MultiQueryAttention(config)
         self.mlp = MLP(config)
         self.dropout = nn.Dropout(config.dropout)
@@ -151,36 +140,29 @@ class Gemma(nn.Module):
     def __init__(self, glob_config):
         super().__init__()
         config = Config(glob_config)
-        self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
-
-        self.dropout = nn.Dropout(config.dropout)
         self.config = config
-
+        self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
+        self.dropout = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
-
         self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
-
         self.rmsnorm = RMSNorm(config.emb_dim)
-
         # self.inp_emb.weight = self.fc_out.weight # https://paperswithcode.com/method/weight-tying
 
     def forward(self, x, y=None):
         batch, seq_len = x.shape
 
         x = self.inp_emb(x)
-
         for block in self.blocks:
             x = block(x)
 
         x = self.rmsnorm(x)
-        logits = self.fc_out(x)
 
+        logits = self.fc_out(x)
         loss = None
         if y is not None:
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1
             )
-
         return logits, loss
 
     @torch.no_grad()
@@ -189,13 +171,10 @@ class Gemma(nn.Module):
         for _ in range(self.config.block_size - inp.shape[1]):
             logits, _ = self.forward(inp)
             logits = logits[:, -1, :] / temperature
-
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
-
             probs = F.softmax(logits, dim=-1)
-
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)
 

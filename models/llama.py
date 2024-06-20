@@ -32,12 +32,11 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
+
 class Config:
     emb_dim = 384
     n_layers = 8
     n_head = 8
-    n_groups = 8
-    n_kv_heads = 8
 
     def __init__(self, config):
         self.config = config
@@ -48,32 +47,27 @@ class Config:
 
         setattr(self, "emb_dim", emb_dim)
 
-
     def __getattr__(self, name):
         # Return attributes from self.config if not found in self
         if hasattr(self.config, name):
             return getattr(self.config, name)
         raise AttributeError(f"'Config_50' object has no attribute '{name}'")
 
+
+# Geglu
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # Initialize nn.Linear layers with specified input and output dimensions
         scaled_hidden = int(2 / 3 * 4 * config.emb_dim)
         self.fc1 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
         self.fc2 = nn.Linear(config.emb_dim, scaled_hidden, bias=False)
         self.fc3 = nn.Linear(scaled_hidden, config.emb_dim, bias=False)
 
     def forward(self, x):
-        # Linear transformation with the first layer
         x1 = self.fc1(x)
-        # Linear transformation with the second layer
         x2 = self.fc2(x)
-        # Apply SiLU activation to the result of the first transformation
         hidden = F.silu(x1)
-        # Element-wise multiplication of SiLU result and second transformation
         hidden = hidden * x2
-        # Final linear transformation with the third layer
         return self.fc3(hidden)
 
 
@@ -89,26 +83,22 @@ class MultiHeadSelfAttention(nn.Module):
         self.Wk = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
         self.Wv = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
         self.Wo = nn.Linear(config.emb_dim, self.n_head * self.head_dim, bias=False)
-
         self.register_buffer(
             "bias",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
                 1, 1, config.block_size, config.block_size
             ),
         )
-
         self.pos_emb = RotaryPositionalEmbeddings(self.head_dim, config.block_size)
 
     def forward(self, x):
         batch_size, seq_len, dim = x.shape
         assert dim == self.emb_dim, "dim must be equal to self.emb_dim"
 
-        # Compute query, key, and value projections
         xq = self.Wq(x)
         xk = self.Wk(x)
         xv = self.Wv(x)
 
-        # Reshape and add positional embeddings
         xq = xq.view(batch_size, seq_len, self.n_head, self.head_dim)
         xk = xk.view(batch_size, seq_len, self.n_head, self.head_dim)
         xv = xv.view(batch_size, seq_len, self.n_head, self.head_dim)
@@ -116,7 +106,6 @@ class MultiHeadSelfAttention(nn.Module):
         xq = self.pos_emb(xq)
         xk = self.pos_emb(xk)
 
-        # Compute attention scores and apply attention mechanism
         xq = xq.transpose(1, 2)
         keys = xk.transpose(1, 2)
         values = xv.transpose(1, 2)
@@ -126,13 +115,10 @@ class MultiHeadSelfAttention(nn.Module):
             self.bias[:, :, :seq_len, :seq_len] == 0, float("-inf")
         )
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-
         context = torch.matmul(scores, values)
+
         context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
-
-        # Apply output projection
         output = self.Wo(context)
-
         return output
 
 
@@ -154,30 +140,22 @@ class LLama(nn.Module):
     def __init__(self, glob_config):
         super().__init__()
         config = Config(glob_config)
-
-        self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
-
         self.config = config
 
+        self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
-
         self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
-
         self.rmsnorm = RMSNorm(config.emb_dim)
-
         # self.inp_emb.weight = self.fc_out.weight # https://paperswithcode.com/method/weight-tying
 
     def forward(self, x, y=None):
         batch, seq_len = x.shape
-
         x = self.inp_emb(x)
-
         for block in self.blocks:
             x = block(x)
-
         x = self.rmsnorm(x)
-        logits = self.fc_out(x)
 
+        logits = self.fc_out(x)
         loss = None
         if y is not None:
             loss = F.cross_entropy(
@@ -192,13 +170,10 @@ class LLama(nn.Module):
         for _ in range(self.config.block_size - inp.shape[1]):
             logits, _ = self.forward(inp)
             logits = logits[:, -1, :] / temperature
-
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
-
             probs = F.softmax(logits, dim=-1)
-
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)
 

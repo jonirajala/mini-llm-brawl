@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     enc = tiktoken.get_encoding("gpt2")
     device = "mps"
-    
+
     class Config:
         vocab_size = enc.n_vocab
         block_size = 96
@@ -65,19 +65,18 @@ if __name__ == "__main__":
         batch_size = 32
         iters = 1000
         dropout = 0.1
-        param_count = 75
+        param_count = 75  # this sets how many million parameters each models has, currently either 50 or 75
 
     config = Config()
 
-    train_data = np.memmap(
-        os.path.join("data", "shakespare_train.bin"), dtype=np.uint16, mode="r"
+    train_data = np.array(
+        np.memmap(
+            os.path.join("data", "shakespare_train.bin"), dtype=np.uint16, mode="r"
+        )
     )
-    train_data = np.array(train_data)
-
-    val_data = np.memmap(
-        os.path.join("data", "shakespare_val.bin"), dtype=np.uint16, mode="r"
+    val_data = np.array(
+        np.memmap(os.path.join("data", "shakespare_val.bin"), dtype=np.uint16, mode="r")
     )
-    val_data = np.array(val_data)
 
     models = ["gpt", "llama", "mistral", "baseline_transformer", "gemma"]
     if model_name:
@@ -131,7 +130,9 @@ if __name__ == "__main__":
         all_train_losses[model_name] = train_losses
         all_val_losses[model_name] = val_losses
 
-        model_save_path = os.path.join("trained_models", f"{model_name}_{config.iters}iters.pt")
+        model_save_path = os.path.join(
+            "trained_models", f"{model_name}_{config.iters}iters.pt"
+        )
         torch.save(model.state_dict(), model_save_path)
         print(f"Model saved to {model_save_path}")
 
