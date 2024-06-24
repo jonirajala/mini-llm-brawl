@@ -8,3 +8,18 @@ from gemma import Gemma
 from gpt import GPT
 from llama import LLama
 from mistral import Mistral
+from mixtral import Mixtral
+
+
+model_names = ["gpt", "llama", "mistral", "baseline_transformer", "gemma", "mixtral"]
+
+def get_model(model_name):
+    model_classes = {
+        "gpt": GPT,
+        "mistral": Mistral,
+        "llama": LLama,
+        "gemma": Gemma,
+        "baseline_transformer": Transformer,
+        "mixtral": Mixtral,
+    }
+    return model_classes.get(model_name, None)

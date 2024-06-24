@@ -54,7 +54,6 @@ class Config:
         raise AttributeError(f"'Config_50' object has no attribute '{name}'")
 
 
-# Geglu
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()

@@ -1,15 +1,17 @@
 """
-https://arxiv.org/pdf/2310.06825
+https://arxiv.org/pdf/2401.04088
 
-like a llama with
-grouped-query attention (GQA) [1], and sliding window attention (SWA)
+same architecture as mistral but uses "mixture-of-experts" layer instead of the mlp layer in the block
 
-GQA is a variant of multihead attention (MHA) that uses fewer write heads
-    (key / value) than query heads.  GQA can be viewed as a generalization of
-    multi-query attention (MQA), which uses a single write head. GQA and MQA give
-    significant speedups over standard MHA in decoder layers, with minimal loss in
-    accuracy. In the paper, GQA is shown to be more accurate than MQA, while still
-    having a significant speedup over MHA.
+Mixtral is based on a transformer architecture [31] and uses the same
+modifications as described in [18], with the notable exceptions that Mixtral supports a fully dense context length of 32k tokens, and the feedforward blocks are replaced by Mixture-of-Expert layers (Section 2.1).
+The model architecture parameters are summarized in Table 1.
+
+Mixtral is a sparse mixture-of-experts network. It is a decoder-only model where the feedforward
+block picks from a set of 8 distinct groups of parameters. At every layer, for every token, a router
+network chooses two of these groups (the “experts”) to process the token and combine their output
+additively. This technique increases the number of parameters of a model while controlling cost and
+latency, as the model only uses a fraction of the total set of parameters per token.
 
 """
 
@@ -25,6 +27,9 @@ class Config:
     n_layers = 8
     n_head = 8
     n_kv_heads = 8
+
+    num_experts = 4
+    num_experts_per_tok = 2
 
     def __init__(self, config):
         self.config = config
@@ -42,7 +47,7 @@ class Config:
         raise AttributeError(f"'Config_50' object has no attribute '{name}'")
 
 
-# Geglu
+# Swiglu
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -57,6 +62,32 @@ class MLP(nn.Module):
         hidden = F.silu(x1)
         hidden = hidden * x2
         return self.fc3(hidden)
+
+
+class MoeLayer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.experts = nn.ModuleList([MLP(config) for _ in range(config.num_experts)])
+        self.gate = nn.Linear(config.emb_dim, config.num_experts, bias=False)
+        self.config = config
+
+    def forward(self, x):
+        gate_logits = self.gate(x)
+        weights, selected_experts = torch.topk(
+            gate_logits, self.config.num_experts_per_tok
+        )
+        weights = F.softmax(weights, dim=1, dtype=torch.float).to(x.dtype)
+        results = torch.zeros_like(x)
+        print(selected_experts.shape, weights.shape)
+        for i, expert in enumerate(self.experts):
+            batch_idx, nth_expert = torch.where(selected_experts == i)
+            print(weights.shape)
+            print(weights[batch_idx, nth_expert, None].shape, expert(x[batch_idx]).shape)
+            results[batch_idx] += weights[batch_idx, nth_expert, None] * expert(
+                x[batch_idx]
+            )
+        return results
+
 
 
 class SlidingWindowSelfAttention(nn.Module):
@@ -142,15 +173,16 @@ class Block(nn.Module):
         self.rn1 = RMSNorm(config.emb_dim)
         self.rn2 = RMSNorm(config.emb_dim)
         self.attn = SlidingWindowSelfAttention(config)
-        self.mlp = MLP(config)
+        # self.mlp = MLP(config)
+        self.moe = MoeLayer(config)
 
     def forward(self, x):
         x = x + self.attn(self.rn1(x))
-        x = x + self.mlp(self.rn2(x))
+        x = x + self.moe(self.rn2(x))
         return x
 
 
-class Mistral(nn.Module):
+class Mixtral(nn.Module):
     def __init__(self, glob_config):
         super().__init__()
         config = Config(glob_config)

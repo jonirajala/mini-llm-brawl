@@ -13,6 +13,7 @@ from torch.nn import functional as F
 class Config:
     emb_dim = 432
     n_layers = 8
+    n_head = 8
 
     def __init__(self, config):
         self.config = config

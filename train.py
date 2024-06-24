@@ -4,7 +4,8 @@ import tiktoken
 import os
 from torch import optim
 from tqdm.auto import tqdm
-from models import *
+from models import get_model, model_names
+
 import json
 import argparse
 from datetime import datetime
@@ -14,15 +15,6 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def get_model(model_name):
-    model_classes = {
-        "gpt": GPT,
-        "mistral": Mistral,
-        "llama": LLama,
-        "gemma": Gemma,
-        "baseline_transformer": Transformer,
-    }
-    return model_classes.get(model_name, None)
 
 
 class DataLoader:
@@ -78,7 +70,7 @@ if __name__ == "__main__":
         np.memmap(os.path.join("data", "shakespare_val.bin"), dtype=np.uint16, mode="r")
     )
 
-    models = ["gpt", "llama", "mistral", "baseline_transformer", "gemma"]
+    models = model_names # from models/__init__.py
     if model_name:
         assert model_name in models, f"Model {model_name} not found"
         models = [model_name]
