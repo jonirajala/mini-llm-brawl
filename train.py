@@ -97,7 +97,15 @@ if __name__ == "__main__":
     os.makedirs("losses", exist_ok=True)
 
     enc = tiktoken.get_encoding("gpt2")
-    device = "mps"
+
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device =  "mps"
+    else:
+        device = "cpu"
+    
+    print(f"Training onf {device}")
 
     train_data = np.array(
         np.memmap(
