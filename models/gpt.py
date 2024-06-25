@@ -132,8 +132,8 @@ class GPT(nn.Module):
 
     def get_param_conf(params):
         param_configurations = {
-            50:  [{"emb_dim": 432, "n_layers": 8, "n_head": 8}],
-            75:  [{"emb_dim": 576, "n_layers": 8, "n_head": 8}],
+            50: [{"emb_dim": 432, "n_layers": 8, "n_head": 8}],
+            75: [{"emb_dim": 576, "n_layers": 8, "n_head": 8}],
             100: [{"emb_dim": 672, "n_layers": 12, "n_head": 8}],
         }
         return param_configurations.get(params)

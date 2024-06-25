@@ -8,6 +8,7 @@ import torch
 import math
 from torch.nn import functional as F
 
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -143,11 +144,11 @@ class Transformer(nn.Module):
             inp = torch.cat((inp, inp_next), dim=1)
 
         return inp[0]
-    
+
     def get_param_conf(params):
         param_configurations = {
-            50:  [{"emb_dim": 432, "n_layers": 8, "n_head": 8}],
-            75:  [{"emb_dim": 576, "n_layers": 8, "n_head": 8}],
+            50: [{"emb_dim": 432, "n_layers": 8, "n_head": 8}],
+            75: [{"emb_dim": 576, "n_layers": 8, "n_head": 8}],
             100: [{"emb_dim": 672, "n_layers": 12, "n_head": 8}],
         }
         return param_configurations.get(params)

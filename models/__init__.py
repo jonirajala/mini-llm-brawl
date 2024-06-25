@@ -12,7 +12,16 @@ from mixtral import Mixtral
 from custom import Custom
 
 
-model_names = ["gpt", "llama", "mistral", "baseline_transformer", "gemma", "mixtral", "custom"]
+model_names = [
+    "gpt",
+    "llama",
+    "mistral",
+    "baseline_transformer",
+    "gemma",
+    "mixtral",
+    "custom",
+]
+
 
 def get_model(model_name):
     model_classes = {
@@ -22,6 +31,6 @@ def get_model(model_name):
         "gemma": Gemma,
         "baseline_transformer": Transformer,
         "mixtral": Mixtral,
-        "custom": Custom
+        "custom": Custom,
     }
     return model_classes.get(model_name, None)

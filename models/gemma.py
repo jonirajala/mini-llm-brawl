@@ -24,6 +24,7 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -160,8 +161,8 @@ class Gemma(nn.Module):
 
     def get_param_conf(params):
         param_configurations = {
-            50:  [{"emb_dim": 512, "n_layers": 8, "n_head": 8}],
-            75:  [{"emb_dim": 640, "n_layers": 8, "n_head": 8}],
+            50: [{"emb_dim": 512, "n_layers": 8, "n_head": 8}],
+            75: [{"emb_dim": 640, "n_layers": 8, "n_head": 8}],
             100: [{"emb_dim": 736, "n_layers": 12, "n_head": 8}],
         }
         return param_configurations.get(params)

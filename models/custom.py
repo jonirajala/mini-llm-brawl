@@ -1,4 +1,3 @@
-
 from torch import nn
 import torch
 import math
@@ -128,15 +127,15 @@ class Custom(nn.Module):
 
         return inp[0]
 
-
     def get_param_conf(params):
         param_configurations = {
-            50:  [{"emb_dim": 512, "n_layers": 8, "n_head": 8},
-                  {"emb_dim": 504, "n_layers": 8, "n_head": 12},
-                  {"emb_dim": 448, "n_layers": 12, "n_head": 8},
-                  {"emb_dim": 432, "n_layers": 14, "n_head": 8}],
-            75:  [{"emb_dim": 512, "n_layers": 8, "n_head": 8}],
+            50: [
+                {"emb_dim": 512, "n_layers": 8, "n_head": 8},
+                {"emb_dim": 504, "n_layers": 8, "n_head": 12},
+                {"emb_dim": 448, "n_layers": 12, "n_head": 8},
+                {"emb_dim": 432, "n_layers": 14, "n_head": 8},
+            ],
+            75: [{"emb_dim": 512, "n_layers": 8, "n_head": 8}],
             100: [{"emb_dim": 576, "n_layers": 10, "n_head": 8}],
         }
         return param_configurations.get(params)
-

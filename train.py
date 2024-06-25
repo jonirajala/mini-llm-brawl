@@ -14,6 +14,7 @@ from datetime import datetime
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+
 class DataLoader:
     def __init__(self, data, batch_size, block_size):
         self.data = data
@@ -34,8 +35,11 @@ class DataLoader:
 
         return x, y
 
+
 class Config:
-    def __init__(self, vocab_size, emb_dim, n_layers, n_head, num_experts=None, top_k=None):
+    def __init__(
+        self, vocab_size, emb_dim, n_layers, n_head, num_experts=None, top_k=None
+    ):
         self.vocab_size = vocab_size
         self.block_size = 96
         self.window_size = self.block_size // 2
@@ -64,7 +68,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tune",
         action="store_true",
-        help="Specify if hyperparameter tuning is required"
+        help="Specify if hyperparameter tuning is required",
     )
     parser.add_argument(
         "--model_params",
@@ -94,7 +98,7 @@ if __name__ == "__main__":
         np.memmap(os.path.join("data", "shakespare_val.bin"), dtype=np.uint16, mode="r")
     )
 
-    models = model_names # from models/__init__.py
+    models = model_names  # from models/__init__.py
     if model_name:
         assert model_name in models, f"Model {model_name} not found"
         models = [model_name]
@@ -104,7 +108,7 @@ if __name__ == "__main__":
 
     for model_name in models:
         model = get_model(model_name)
-        
+
         configs = get_config(enc.n_vocab, model, param_count)
 
         if tune:
@@ -119,7 +123,7 @@ if __name__ == "__main__":
             print(
                 f"Training on {(config.batch_size * config.iters * config.block_size) // 1_000_000}M tokens"
             )
-            
+
             model_name = f"{model_name}-{idx}-{params // 1_000_000}M"
 
             print(f"Model: {model_name:<10} | Params: {params:>10,}")

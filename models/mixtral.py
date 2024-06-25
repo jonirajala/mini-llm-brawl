@@ -51,10 +51,9 @@ class MoeLayer(nn.Module):
     def forward(self, x):
         gate_logits = self.gate(x)
 
-
         top_k_logits, top_k_indices = gate_logits.topk(self.config.top_k, dim=-1)
 
-        zeros = torch.full_like(gate_logits, float('-inf'))
+        zeros = torch.full_like(gate_logits, float("-inf"))
         sparse_logits = zeros.scatter(-1, top_k_indices, top_k_logits)
         gating_output = F.softmax(sparse_logits, dim=-1)
 
@@ -217,8 +216,32 @@ class Mixtral(nn.Module):
 
     def get_param_conf(params):
         param_configurations = {
-            50:  [{"emb_dim": 384, "n_layers": 6, "n_head": 8, "num_experts": 5, "top_k": 2}],
-            75:  [{"emb_dim": 384, "n_layers": 6, "n_head": 8, "num_experts": 5, "top_k": 2}],
-            100: [{"emb_dim": 416, "n_layers": 8, "n_head": 8, "num_experts": 5, "top_k": 2}],
+            50: [
+                {
+                    "emb_dim": 384,
+                    "n_layers": 6,
+                    "n_head": 8,
+                    "num_experts": 5,
+                    "top_k": 2,
+                }
+            ],
+            75: [
+                {
+                    "emb_dim": 384,
+                    "n_layers": 6,
+                    "n_head": 8,
+                    "num_experts": 5,
+                    "top_k": 2,
+                }
+            ],
+            100: [
+                {
+                    "emb_dim": 416,
+                    "n_layers": 8,
+                    "n_head": 8,
+                    "num_experts": 5,
+                    "top_k": 2,
+                }
+            ],
         }
         return param_configurations.get(params)

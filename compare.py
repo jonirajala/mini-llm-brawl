@@ -63,5 +63,3 @@ if __name__ == "__main__":
     plt.grid(True)
     # plt.savefig('graph-75M.png')
     plt.show()
-    
-
