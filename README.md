@@ -19,6 +19,7 @@ python3 train.py [model_name] --model_params=[n_params]
 ```bash
 python3 train.py [model_name] --tune --model_params=[n_params]
 ```
+use --save if you want to save the model and losses
 
 at the moment only 50M, 75M and 100M param models are supported
 

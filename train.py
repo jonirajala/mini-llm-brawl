@@ -71,6 +71,11 @@ if __name__ == "__main__":
         help="Specify if hyperparameter tuning is required",
     )
     parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Specify if you want to save model and losses",
+    )
+    parser.add_argument(
         "--model_params",
         type=int,
         help="Specify the number of parameters",
@@ -78,7 +83,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     model_name = args.model_name
     tune = args.tune
+    save = args.save
     param_count = args.model_params
+
+    if not save:
+        print("!!Not saving the model or losses!!")
+
     if not param_count:
         print("model parameter count not specified, going with 75M")
         param_count = 75
@@ -112,25 +122,21 @@ if __name__ == "__main__":
         configs = get_config(enc.n_vocab, model, param_count)
 
         if tune:
-            assert len(configs) > 0, "Can't tune with only singel set of hyperparams"
+            assert len(configs) > 0, "Can't tune with only single set of hyperparams"
         else:
+            # take just the first config if not tuning
             configs = [configs[0]]
 
         for idx, config in enumerate(configs):
             model = model(config).to(device)
             params = count_parameters(model)
+            model_name = f"{model_name}-{idx}-{params // 1_000_000}M"
+            optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1, betas=(0.9, 0.95))
 
             print(
                 f"Training on {(config.batch_size * config.iters * config.block_size) // 1_000_000}M tokens"
             )
-
-            model_name = f"{model_name}-{idx}-{params // 1_000_000}M"
-
             print(f"Model: {model_name:<10} | Params: {params:>10,}")
-
-            optimizer = optim.AdamW(
-                model.parameters(), lr=3e-4, weight_decay=0.1, betas=(0.9, 0.95)
-            )
 
             trainloader = DataLoader(train_data, config.batch_size, config.block_size)
             valloader = DataLoader(val_data, config.batch_size, config.block_size)
@@ -163,7 +169,8 @@ if __name__ == "__main__":
             model_save_path = os.path.join(
                 "trained_models", f"{model_name}_{config.iters}iters.pt"
             )
-            torch.save(model.state_dict(), model_save_path)
+            if save:
+                torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 
             model.eval()
@@ -172,6 +179,7 @@ if __name__ == "__main__":
             gen_text = enc.decode(gen_text)
             print(gen_text)
 
-    f_name = f"losses/{config.iters}_{datetime.now().strftime('%d-%m')}.json"
-    with open(f_name, "w") as f:
-        json.dump({"train_losses": all_train_losses, "val_losses": all_val_losses}, f)
+    if save:
+        f_name = f"losses/{config.iters}_{datetime.now().strftime('%d-%m')}.json"
+        with open(f_name, "w") as f:
+            json.dump({"train_losses": all_train_losses, "val_losses": all_val_losses}, f)
