@@ -10,27 +10,6 @@ import math
 from torch.nn import functional as F
 
 
-class Config:
-    emb_dim = 432
-    n_layers = 8
-    n_head = 8
-
-    def __init__(self, config):
-        self.config = config
-        if config.param_count == 50:
-            emb_dim = 432
-        elif config.param_count == 75:
-            emb_dim = 576
-
-        setattr(self, "emb_dim", emb_dim)
-
-    def __getattr__(self, name):
-        # Return attributes from self.config if not found in self
-        if hasattr(self.config, name):
-            return getattr(self.config, name)
-        raise AttributeError(f"'Config_50' object has no attribute '{name}'")
-
-
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -104,9 +83,8 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(self, glob_config):
+    def __init__(self, config):
         super().__init__()
-        config = Config(glob_config)
         self.config = config
 
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
@@ -151,3 +129,11 @@ class GPT(nn.Module):
             inp = torch.cat((inp, inp_next), dim=1)
 
         return inp[0]
+
+    def get_param_conf(params):
+        param_configurations = {
+            50:  [{"emb_dim": 432, "n_layers": 8, "n_head": 8}],
+            75:  [{"emb_dim": 576, "n_layers": 8, "n_head": 8}],
+            100: [{"emb_dim": 672, "n_layers": 12, "n_head": 8}],
+        }
+        return param_configurations.get(params)

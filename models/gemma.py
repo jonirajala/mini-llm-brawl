@@ -24,27 +24,6 @@ import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
-
-class Config:
-    emb_dim = 384
-    n_layers = 8
-    n_head = 8
-
-    def __init__(self, config):
-        self.config = config
-        if config.param_count == 50:
-            emb_dim = 512
-        elif config.param_count == 75:
-            emb_dim = 640
-        setattr(self, "emb_dim", emb_dim)
-
-    def __getattr__(self, name):
-        # Return attributes from self.config if not found in self
-        if hasattr(self.config, name):
-            return getattr(self.config, name)
-        raise AttributeError(f"'Config_50' object has no attribute '{name}'")
-
-
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -64,9 +43,9 @@ class MLP(nn.Module):
 class MultiQueryAttention(nn.Module):
     def __init__(self, config):
         super(MultiQueryAttention, self).__init__()
-        assert (
-            self.head_dim * config.n_head == self.emb_dim
-        ), "emb_dim must be divisible by n_head"
+        # assert (
+        #     self.head_dim * config.n_head == self.emb_dim
+        # ), "emb_dim must be divisible by n_head"
 
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
@@ -137,9 +116,8 @@ class Block(nn.Module):
 
 
 class Gemma(nn.Module):
-    def __init__(self, glob_config):
+    def __init__(self, config):
         super().__init__()
-        config = Config(glob_config)
         self.config = config
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.dropout = nn.Dropout(config.dropout)
@@ -179,3 +157,11 @@ class Gemma(nn.Module):
             inp = torch.cat((inp, inp_next), dim=1)
 
         return inp[0]
+
+    def get_param_conf(params):
+        param_configurations = {
+            50:  [{"emb_dim": 512, "n_layers": 8, "n_head": 8}],
+            75:  [{"emb_dim": 640, "n_layers": 8, "n_head": 8}],
+            100: [{"emb_dim": 736, "n_layers": 12, "n_head": 8}],
+        }
+        return param_configurations.get(params)

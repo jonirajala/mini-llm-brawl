@@ -61,7 +61,7 @@ if __name__ == "__main__":
     plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
-    plt.savefig('graph-75M.png')
+    # plt.savefig('graph-75M.png')
     plt.show()
     
 

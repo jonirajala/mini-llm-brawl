@@ -14,9 +14,6 @@ from datetime import datetime
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
-
-
 class DataLoader:
     def __init__(self, data, batch_size, block_size):
         self.data = data
@@ -37,29 +34,56 @@ class DataLoader:
 
         return x, y
 
+class Config:
+    def __init__(self, vocab_size, emb_dim, n_layers, n_head, num_experts=None, top_k=None):
+        self.vocab_size = vocab_size
+        self.block_size = 96
+        self.window_size = self.block_size // 2
+        self.batch_size = 32
+        self.iters = 1000
+        self.dropout = 0.1
+        self.n_kv_heads = 8
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.emb_dim = emb_dim
+        self.n_layers = n_layers
+        self.n_head = n_head
+
+
+def get_config(vocab_size, model, params):
+    config_params = model.get_param_conf(params)
+    if config_params:
+        return [Config(vocab_size, **config_param) for config_param in config_params]
+    else:
+        raise ValueError(f"Configuration {params} not found.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load a specific model.")
     parser.add_argument("model_name", nargs="?", help="Name of the model to load")
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="Specify if hyperparameter tuning is required"
+    )
+    parser.add_argument(
+        "--model_params",
+        type=int,
+        help="Specify the number of parameters",
+    )
     args = parser.parse_args()
     model_name = args.model_name
+    tune = args.tune
+    param_count = args.model_params
+    if not param_count:
+        print("model parameter count not specified, going with 75M")
+        param_count = 75
 
     os.makedirs("trained_models", exist_ok=True)
     os.makedirs("losses", exist_ok=True)
 
     enc = tiktoken.get_encoding("gpt2")
     device = "mps"
-
-    class Config:
-        vocab_size = enc.n_vocab
-        block_size = 96
-        window_size = block_size // 2
-        batch_size = 32
-        iters = 1000
-        dropout = 0.1
-        param_count = 75  # this sets how many million parameters each models has, currently either 50 or 75
-
-    config = Config()
 
     train_data = np.array(
         np.memmap(
@@ -78,61 +102,71 @@ if __name__ == "__main__":
     all_train_losses = {}
     all_val_losses = {}
 
-    print(
-        f"Training on {(config.batch_size * config.iters * config.block_size) // 1_000_000}M tokens"
-    )
-
     for model_name in models:
         model = get_model(model_name)
-        model = model(config).to(device)
-        params = count_parameters(model)
-        model_name = f"{model_name}-{params // 1_000_000}M"
+        
+        configs = get_config(enc.n_vocab, model, param_count)
 
-        print(f"Model: {model_name:<10} | Params: {params:>10,}")
+        if tune:
+            assert len(configs) > 0, "Can't tune with only singel set of hyperparams"
+        else:
+            configs = [configs[0]]
 
-        optimizer = optim.AdamW(
-            model.parameters(), lr=3e-4, weight_decay=0.1, betas=(0.9, 0.95)
-        )
+        for idx, config in enumerate(configs):
+            model = model(config).to(device)
+            params = count_parameters(model)
 
-        trainloader = DataLoader(train_data, config.batch_size, config.block_size)
-        valloader = DataLoader(val_data, config.batch_size, config.block_size)
+            print(
+                f"Training on {(config.batch_size * config.iters * config.block_size) // 1_000_000}M tokens"
+            )
+            
+            model_name = f"{model_name}-{idx}-{params // 1_000_000}M"
 
-        train_losses = []
-        val_losses = []
-        model.train()
-        pbar = tqdm(range(config.iters), desc="Training Progress")
-        for i in pbar:
-            x, y = trainloader.get_batch()
-            model.zero_grad()
-            out, loss = model(x, y)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            pbar.set_postfix({"train_loss": loss.item()})
-            train_losses.append(loss.item())
+            print(f"Model: {model_name:<10} | Params: {params:>10,}")
 
-            if i % 50 == 0:
-                model.eval()
-                val_x, val_y = valloader.get_batch()
-                with torch.no_grad():
-                    val_out, val_loss = model(val_x, val_y)
-                val_losses.append(val_loss.item())
-                model.train()
+            optimizer = optim.AdamW(
+                model.parameters(), lr=3e-4, weight_decay=0.1, betas=(0.9, 0.95)
+            )
 
-        all_train_losses[model_name] = train_losses
-        all_val_losses[model_name] = val_losses
+            trainloader = DataLoader(train_data, config.batch_size, config.block_size)
+            valloader = DataLoader(val_data, config.batch_size, config.block_size)
 
-        model_save_path = os.path.join(
-            "trained_models", f"{model_name}_{config.iters}iters.pt"
-        )
-        torch.save(model.state_dict(), model_save_path)
-        print(f"Model saved to {model_save_path}")
+            train_losses = []
+            val_losses = []
+            model.train()
+            pbar = tqdm(range(config.iters), desc="Training Progress")
+            for i in pbar:
+                x, y = trainloader.get_batch()
+                model.zero_grad()
+                out, loss = model(x, y)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                pbar.set_postfix({"train_loss": loss.item()})
+                train_losses.append(loss.item())
 
-        model.eval()
-        inp = torch.tensor(enc.encode("And that is  ")).to(device)
-        gen_text = model.generate(inp).detach().cpu().numpy()
-        gen_text = enc.decode(gen_text)
-        print(gen_text)
+                if i % 50 == 0:
+                    model.eval()
+                    val_x, val_y = valloader.get_batch()
+                    with torch.no_grad():
+                        val_out, val_loss = model(val_x, val_y)
+                    val_losses.append(val_loss.item())
+                    model.train()
+
+            all_train_losses[model_name] = train_losses
+            all_val_losses[model_name] = val_losses
+
+            model_save_path = os.path.join(
+                "trained_models", f"{model_name}_{config.iters}iters.pt"
+            )
+            torch.save(model.state_dict(), model_save_path)
+            print(f"Model saved to {model_save_path}")
+
+            model.eval()
+            inp = torch.tensor(enc.encode("And that is  ")).to(device)
+            gen_text = model.generate(inp).detach().cpu().numpy()
+            gen_text = enc.decode(gen_text)
+            print(gen_text)
 
     f_name = f"losses/{config.iters}_{datetime.now().strftime('%d-%m')}.json"
     with open(f_name, "w") as f:

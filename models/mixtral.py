@@ -13,6 +13,8 @@ network chooses two of these groups (the “experts”) to process the token and
 additively. This technique increases the number of parameters of a model while controlling cost and
 latency, as the model only uses a fraction of the total set of parameters per token.
 
+Instead of having single mlp we have many mlps (experts) and a linear layer which assings logits (a measure) to which expert a token should be inputted to
+
 """
 
 from torch import nn
@@ -20,31 +22,6 @@ import torch
 import math
 from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
-
-
-class Config:
-    emb_dim = 384
-    n_layers = 6
-    n_head = 6
-    n_kv_heads = 6
-
-    num_experts = 5
-    top_k = 2
-
-    def __init__(self, config):
-        self.config = config
-        if config.param_count == 50:
-            emb_dim = 384
-        elif config.param_count == 75:
-            emb_dim = 384
-
-        setattr(self, "emb_dim", emb_dim)
-
-    def __getattr__(self, name):
-        # Return attributes from self.config if not found in self
-        if hasattr(self.config, name):
-            return getattr(self.config, name)
-        raise AttributeError(f"'Config_50' object has no attribute '{name}'")
 
 
 # Swiglu
@@ -200,9 +177,8 @@ class Block(nn.Module):
 
 
 class Mixtral(nn.Module):
-    def __init__(self, glob_config):
+    def __init__(self, config):
         super().__init__()
-        config = Config(glob_config)
         self.config = config
 
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
@@ -238,3 +214,11 @@ class Mixtral(nn.Module):
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)
         return inp[0]
+
+    def get_param_conf(params):
+        param_configurations = {
+            50:  [{"emb_dim": 384, "n_layers": 6, "n_head": 8, "num_experts": 5, "top_k": 2}],
+            75:  [{"emb_dim": 384, "n_layers": 6, "n_head": 8, "num_experts": 5, "top_k": 2}],
+            100: [{"emb_dim": 416, "n_layers": 8, "n_head": 8, "num_experts": 5, "top_k": 2}],
+        }
+        return param_configurations.get(params)

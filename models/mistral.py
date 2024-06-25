@@ -20,28 +20,6 @@ from torch.nn import functional as F
 from torchtune.modules import RMSNorm, RotaryPositionalEmbeddings
 
 
-class Config:
-    emb_dim = 384
-    n_layers = 8
-    n_head = 8
-    n_kv_heads = 8
-
-    def __init__(self, config):
-        self.config = config
-        if config.param_count == 50:
-            emb_dim = 384
-        elif config.param_count == 75:
-            emb_dim = 512
-
-        setattr(self, "emb_dim", emb_dim)
-
-    def __getattr__(self, name):
-        # Return attributes from self.config if not found in self
-        if hasattr(self.config, name):
-            return getattr(self.config, name)
-        raise AttributeError(f"'Config_50' object has no attribute '{name}'")
-
-
 # Geglu
 class MLP(nn.Module):
     def __init__(self, config):
@@ -151,9 +129,8 @@ class Block(nn.Module):
 
 
 class Mistral(nn.Module):
-    def __init__(self, glob_config):
+    def __init__(self, config):
         super().__init__()
-        config = Config(glob_config)
         self.config = config
 
         self.inp_emb = nn.Embedding(config.vocab_size, config.emb_dim)
@@ -189,3 +166,11 @@ class Mistral(nn.Module):
             inp_next = torch.multinomial(probs, num_samples=1)
             inp = torch.cat((inp, inp_next), dim=1)
         return inp[0]
+
+    def get_param_conf(params):
+        param_configurations = {
+            50:  [{"emb_dim": 384, "n_layers": 8, "n_head": 8}],
+            75:  [{"emb_dim": 512, "n_layers": 8, "n_head": 8}],
+            100: [{"emb_dim": 576, "n_layers": 10, "n_head": 8}],
+        }
+        return param_configurations.get(params)
