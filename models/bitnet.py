@@ -1,9 +1,11 @@
 """
 https://arxiv.org/pdf/2310.11453
 BitNet: Scaling 1-bit Transformers for Large Language Models
+quantization-aware training for 1-bit large language models
 
-
-
+BitNet uses the same layout as Transformers, stacking blocks of self-attention
+and feed-forward networks. Compared with vanilla Transformer, BitNet uses BitLinear (Eq. 11)
+instead of conventional matrix multiplication, which employs binarized (i.e., 1-bit) model weights.
 """
 
 from torch import nn
@@ -12,16 +14,52 @@ import math
 from torch.nn import functional as F
 
 
+class BitLinear(nn.Module):
+    def __init__(self, inp, out, before_activation=True):
+        super(BitLinear, self).__init__()
+        self.inp = inp
+        self.out = out
+        self.before_activation = before_activation
+        self.weight = nn.Parameter(torch.Tensor(out, inp))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # Kaiming initialization
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+
+    def forward(self, x):
+        w = self.weight
+        n, m = w.shape
+        alpha = w.mean()
+        quant_w = (w-alpha).sign()
+
+        x_norm = F.layer_norm(x, [self.inp])
+        b = 8
+        Qb = 2**(b-1)
+        gamma = torch.max(torch.abs(x))
+        eps = 1e-5
+        beta = torch.norm(w, p=1) / (n * m)
+        scale = beta * gamma / Qb
+
+        if self.before_activation:
+            quant_x = torch.clamp(x_norm*Qb/gamma, min=-Qb+eps, max=Qb-eps) * scale
+        else:
+            n = torch.min(x_norm)
+            quant_x = torch.clamp((x_norm-n)*Qb/gamma, min=eps, max=Qb-eps) * scale
+        y = F.linear(quant_x, quant_w)
+        return y
+
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.fc1 = nn.Linear(config.emb_dim, config.emb_dim)
-        self.fc2 = nn.Linear(config.emb_dim, config.emb_dim)
-        self.relu = nn.ReLU()
+        self.fc1 = BitLinear(config.emb_dim, config.emb_dim, before_activation=True)
+        self.fc2 = BitLinear(config.emb_dim, config.emb_dim, before_activation=True)
+        self.gelu = nn.GELU()
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.relu(self.fc1(x))
+        x = self.gelu(self.fc1(x))
         x = self.fc2(x)
         x = self.dropout(x)
         return x
@@ -34,8 +72,8 @@ class CausalSelfAttention(nn.Module):
         self.emb_dim = config.emb_dim
         self.n_head = config.n_head
 
-        self.fc_in = nn.Linear(config.emb_dim, config.emb_dim * 3)
-        self.fc_out = nn.Linear(config.emb_dim, config.emb_dim)
+        self.fc_in = BitLinear(config.emb_dim, config.emb_dim * 3, before_activation=False)
+        self.fc_out = BitLinear(config.emb_dim, config.emb_dim, before_activation=False)
         self.register_buffer(
             "bias",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
@@ -114,7 +152,7 @@ class BitNet(nn.Module):
         self.positional_encoding = PositionalEncoding(config.emb_dim, config.block_size)
         self.dropout = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
-        self.fc_out = nn.Linear(config.emb_dim, config.vocab_size, bias=False)
+        self.fc_out = BitLinear(config.emb_dim, config.vocab_size, before_activation=False)
         self.ln = nn.LayerNorm(config.emb_dim)
 
         # self.inp_emb.weight = self.fc_out.weight # https://paperswithcode.com/method/weight-tying
@@ -125,7 +163,6 @@ class BitNet(nn.Module):
         for block in self.blocks:
             x = block(x)
         logits = self.fc_out(x)
-
         loss = None
         if y is not None:
             loss = F.cross_entropy(

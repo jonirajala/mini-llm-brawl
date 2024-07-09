@@ -10,7 +10,7 @@ from llama import LLama
 from mistral import Mistral
 from mixtral import Mixtral
 from custom import Custom
-
+from bitnet import BitNet
 
 model_names = [
     "gpt",
@@ -20,6 +20,7 @@ model_names = [
     "gemma",
     "mixtral",
     "custom",
+    "bitnet",
 ]
 
 
@@ -32,5 +33,6 @@ def get_model(model_name):
         "baseline_transformer": Transformer,
         "mixtral": Mixtral,
         "custom": Custom,
+        "bitnet": BitNet
     }
     return model_classes.get(model_name, None)
