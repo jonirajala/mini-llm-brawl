@@ -6,6 +6,11 @@ quantization-aware training for 1-bit large language models
 BitNet uses the same layout as Transformers, stacking blocks of self-attention
 and feed-forward networks. Compared with vanilla Transformer, BitNet uses BitLinear (Eq. 11)
 instead of conventional matrix multiplication, which employs binarized (i.e., 1-bit) model weights.
+
+Straight-through estimator. To train our 1-bit model, we employ the straight-through estimator
+(STE)[BLC13] to approximate the gradient during backpropagation. This method bypasses the nondifferentiable functions, such as the Sign (Eq. 2) and Clip (Eq. 5) functions, during the backward pass.
+STE allows gradients to flow through the network without being affected by these non-differentiable
+functions, making it possible to train our quantized model.
 """
 
 from torch import nn
@@ -13,6 +18,24 @@ import torch
 import math
 from torch.nn import functional as F
 
+
+class STEQuantizeSign(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        return input.sign()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output
+
+class STEQuantizeClip(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, min_val, max_val):
+        return torch.clamp(input, min_val, max_val)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output.clone(), None, None
 
 class BitLinear(nn.Module):
     def __init__(self, inp, out, before_activation=True):
@@ -24,37 +47,44 @@ class BitLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        # Kaiming initialization
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 
     def forward(self, x):
         w = self.weight
         n, m = w.shape
+        
+        # Weight quantization using STE
         alpha = w.mean()
-        quant_w = (w-alpha).sign()
+        quant_w = STEQuantizeSign.apply(w - alpha)
 
-        x_norm = F.layer_norm(x, [self.inp])
-        b = 8
-        Qb = 2**(b-1)
+        # Layer normalization of input
+        x_norm = F.layer_norm(x, x.size()[1:])
+        
+        # Activation quantization parameters
+        b = 8  # bit precision
+        Qb = 2 ** (b - 1)
         gamma = torch.max(torch.abs(x))
         eps = 1e-5
         beta = torch.norm(w, p=1) / (n * m)
         scale = beta * gamma / Qb
 
+        # Quantize activations using STE
         if self.before_activation:
-            quant_x = torch.clamp(x_norm*Qb/gamma, min=-Qb+eps, max=Qb-eps) * scale
+            eta = torch.min(x_norm)
+            quant_x = STEQuantizeClip.apply((x_norm - eta) * Qb / gamma, eps, Qb - eps)
         else:
-            n = torch.min(x_norm)
-            quant_x = torch.clamp((x_norm-n)*Qb/gamma, min=eps, max=Qb-eps) * scale
-        y = F.linear(quant_x, quant_w)
+            quant_x = STEQuantizeClip.apply(x_norm * Qb / gamma, -Qb + eps, Qb - eps)
+
+        # Matrix multiplication with binarized weights and scaling
+        y = F.linear(quant_x, quant_w) * scale
         return y
-
-
+    
+    
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.fc1 = BitLinear(config.emb_dim, config.emb_dim, before_activation=True)
-        self.fc2 = BitLinear(config.emb_dim, config.emb_dim, before_activation=True)
+        self.fc2 = BitLinear(config.emb_dim, config.emb_dim, before_activation=False)
         self.gelu = nn.GELU()
         self.dropout = nn.Dropout(config.dropout)
 
